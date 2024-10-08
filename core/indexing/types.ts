@@ -1,19 +1,21 @@
-import { IndexTag, IndexingProgressUpdate } from "..";
+import { IndexTag, IndexingProgressUpdate } from "../index.js";
 
 export enum IndexResultType {
   Compute = "compute",
   Delete = "del",
   AddTag = "addTag",
   RemoveTag = "removeTag",
+  UpdateLastUpdated = "updateLastUpdated",
 }
 
 export type MarkCompleteCallback = (
   items: PathAndCacheKey[],
   resultType: IndexResultType,
-) => void;
+) => Promise<void>;
 
 export interface CodebaseIndex {
   artifactId: string;
+  relativeExpectedTime: number;
   update(
     tag: IndexTag,
     results: RefreshIndexResults,

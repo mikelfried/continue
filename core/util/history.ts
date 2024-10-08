@@ -1,18 +1,26 @@
 import * as fs from "fs";
-import { PersistedSessionInfo, SessionInfo } from "..";
-import { getSessionFilePath, getSessionsListPath } from "./paths";
+import { PersistedSessionInfo, SessionInfo } from "../index.js";
+import { ListHistoryOptions } from "../protocol/core.js";
+import { getSessionFilePath, getSessionsListPath } from "./paths.js";
 
 class HistoryManager {
-  list(): SessionInfo[] {
+  list(options: ListHistoryOptions): SessionInfo[] {
     const filepath = getSessionsListPath();
     if (!fs.existsSync(filepath)) {
       return [];
     }
     const content = fs.readFileSync(filepath, "utf8");
-    const sessions = JSON.parse(content).filter((session: any) => {
+    let sessions = JSON.parse(content).filter((session: any) => {
       // Filter out old format
       return typeof session.session_id !== "string";
     });
+
+    // Apply limit and offset
+    if (options.limit) {
+      const offset = options.offset || 0;
+      sessions = sessions.slice(offset, offset + options.limit);
+    }
+
     return sessions;
   }
 
@@ -40,7 +48,10 @@ class HistoryManager {
       (session) => session.sessionId !== sessionId,
     );
 
-    fs.writeFileSync(sessionsListFile, JSON.stringify(sessionsList));
+    fs.writeFileSync(
+      sessionsListFile,
+      JSON.stringify(sessionsList, undefined, 2),
+    );
   }
 
   load(sessionId: string): PersistedSessionInfo {
@@ -55,7 +66,7 @@ class HistoryManager {
       session.sessionId = sessionId;
       return session;
     } catch (e) {
-      console.log(`Error migrating session: ${e}`);
+      console.log(`Error loading session: ${e}`);
       return {
         history: [],
         title: "Failed to load session",
@@ -69,7 +80,7 @@ class HistoryManager {
     // Save the main session json file
     fs.writeFileSync(
       getSessionFilePath(session.sessionId),
-      JSON.stringify(session),
+      JSON.stringify(session, undefined, 2),
     );
 
     // Read and update the sessions list
@@ -94,7 +105,6 @@ class HistoryManager {
         if (sessionInfo.sessionId === session.sessionId) {
           sessionInfo.title = session.title;
           sessionInfo.workspaceDirectory = session.workspaceDirectory;
-          sessionInfo.dateCreated = String(Date.now());
           found = true;
           break;
         }
@@ -110,17 +120,19 @@ class HistoryManager {
         sessionsList.push(sessionInfo);
       }
 
-      fs.writeFileSync(sessionsListFilePath, JSON.stringify(sessionsList));
+      fs.writeFileSync(
+        sessionsListFilePath,
+        JSON.stringify(sessionsList, undefined, 2),
+      );
     } catch (error) {
       if (error instanceof SyntaxError) {
         throw new Error(
           `It looks like there is a JSON formatting error in your sessions.json file (${sessionsListFilePath}). Please fix this before creating a new session.`,
         );
-      } else {
-        throw new Error(
-          `It looks like there is a validation error in your sessions.json file (${sessionsListFilePath}). Please fix this before creating a new session. Error: ${error}`,
-        );
       }
+      throw new Error(
+        `It looks like there is a validation error in your sessions.json file (${sessionsListFilePath}). Please fix this before creating a new session. Error: ${error}`,
+      );
     }
   }
 }

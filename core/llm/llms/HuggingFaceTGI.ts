@@ -1,8 +1,9 @@
-import { BaseLLM } from "..";
-import { CompletionOptions, LLMOptions, ModelProvider } from "../..";
-import { streamSse } from "../stream";
+import { CompletionOptions, LLMOptions, ModelProvider } from "../../index.js";
+import { BaseLLM } from "../index.js";
+import { streamSse } from "../stream.js";
 
 class HuggingFaceTGI extends BaseLLM {
+  private static MAX_STOP_TOKENS = 4;
   static providerName: ModelProvider = "huggingface-tgi";
   static defaultOptions: Partial<LLMOptions> = {
     apiBase: "http://localhost:8080/",
@@ -23,7 +24,7 @@ class HuggingFaceTGI extends BaseLLM {
       }
       const json = await response.json();
       this.model = json.model_id;
-      this.contextLength = parseInt(json.max_input_length);
+      this.contextLength = Number.parseInt(json.max_input_length);
     });
   }
 
@@ -36,7 +37,10 @@ class HuggingFaceTGI extends BaseLLM {
       top_k: options.topK,
       presence_penalty: options.presencePenalty,
       frequency_penalty: options.frequencyPenalty,
-      stop: options.stop,
+      stop: options.stop?.slice(
+        0,
+        this.maxStopWords ?? HuggingFaceTGI.MAX_STOP_TOKENS,
+      ),
     };
 
     return finalOptions;

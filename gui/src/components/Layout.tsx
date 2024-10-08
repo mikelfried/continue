@@ -1,89 +1,34 @@
-import {
-  Cog6ToothIcon,
-  QuestionMarkCircleIcon,
-} from "@heroicons/react/24/outline";
-import { useEffect, useState } from "react";
+import { useContext, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import styled from "styled-components";
-import {
-  defaultBorderRadius,
-  vscBackground,
-  vscForeground,
-  vscInputBackground,
-} from ".";
+import { CustomScrollbarDiv, defaultBorderRadius, vscInputBackground } from ".";
+import { IdeMessengerContext } from "../context/IdeMessenger";
 import { useWebviewListener } from "../hooks/useWebviewListener";
-import { defaultModelSelector } from "../redux/selectors/modelSelectors";
-import {
-  setBottomMessage,
-  setBottomMessageCloseTimeout,
-  setShowDialog,
-} from "../redux/slices/uiStateSlice";
 import { RootState } from "../redux/store";
 import { getFontSize, isMetaEquivalentKeyPressed } from "../util";
-import { isJetBrains, postToIde } from "../util/ide";
-import { getLocalStorage } from "../util/localStorage";
-import HeaderButtonWithText from "./HeaderButtonWithText";
+import { getLocalStorage, setLocalStorage } from "../util/localStorage";
+import PostHogPageView from "./PosthogPageView";
+import Footer from "./Footer";
+import { updateApplyState, setShowDialog } from "../redux/slices/uiStateSlice";
 import TextDialog from "./dialogs";
-import IndexingProgressBar from "./loaders/IndexingProgressBar";
-import ProgressBar from "./loaders/ProgressBar";
-import ModelSelect from "./modelSelection/ModelSelect";
+import { useOnboardingCard, isNewUserOnboarding } from "./OnboardingCard";
 
-// #region Styled Components
-const FOOTER_HEIGHT = "1.8em";
-
-const LayoutTopDiv = styled.div`
+const LayoutTopDiv = styled(CustomScrollbarDiv)`
   height: 100%;
   border-radius: ${defaultBorderRadius};
-  scrollbar-base-color: transparent;
-  scrollbar-width: thin;
-  background-color: ${vscBackground};
+  position: relative;
+  overflow-x: hidden;
 
-  & * {
-    ::-webkit-scrollbar {
-      width: 4px;
-    }
-
-    ::-webkit-scrollbar:horizontal {
-      height: 4px;
-    }
-
-    ::-webkit-scrollbar-thumb {
-      border-radius: 2px;
-    }
+  &::after {
+    position: absolute;
+    content: "";
+    width: 100%;
+    height: 1px;
+    background-color: rgba(136, 136, 136, 0.3);
+    top: 0;
+    left: 0;
   }
-`;
-
-const BottomMessageDiv = styled.div<{ displayOnBottom: boolean }>`
-  position: fixed;
-  bottom: ${(props) => (props.displayOnBottom ? "50px" : undefined)};
-  top: ${(props) => (props.displayOnBottom ? undefined : "50px")};
-  left: 0;
-  right: 0;
-  margin: 8px;
-  margin-top: 0;
-  background-color: ${vscInputBackground};
-  color: ${vscForeground};
-  border-radius: ${defaultBorderRadius};
-  padding: 12px;
-  z-index: 100;
-  box-shadow: 0px 0px 2px 0px ${vscForeground};
-  max-height: 35vh;
-`;
-
-const Footer = styled.footer`
-  display: flex;
-  flex-direction: row;
-  gap: 8px;
-  justify-content: right;
-  padding: 8px;
-  align-items: center;
-  width: calc(100% - 16px);
-  height: ${FOOTER_HEIGHT};
-  background-color: transparent;
-  backdrop-filter: blur(12px);
-
-  overflow: hidden;
 `;
 
 const GridDiv = styled.div`
@@ -93,7 +38,7 @@ const GridDiv = styled.div`
   overflow-x: visible;
 `;
 
-const DropdownPortalDiv = styled.div`
+const ModelDropdownPortalDiv = styled.div`
   background-color: ${vscInputBackground};
   position: relative;
   margin-left: 8px;
@@ -101,12 +46,21 @@ const DropdownPortalDiv = styled.div`
   font-size: ${getFontSize()};
 `;
 
-// #endregion
+const ProfileDropdownPortalDiv = styled.div`
+  background-color: ${vscInputBackground};
+  position: relative;
+  margin-left: 8px;
+  z-index: 200;
+  font-size: ${getFontSize() - 2};
+`;
 
 const Layout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useDispatch();
+  const ideMessenger = useContext(IdeMessengerContext);
+  const onboardingCard = useOnboardingCard();
+
   const dialogMessage = useSelector(
     (state: RootState) => state.uiState.dialogMessage,
   );
@@ -114,19 +68,7 @@ const Layout = () => {
     (state: RootState) => state.uiState.showDialog,
   );
 
-  const defaultModel = useSelector(defaultModelSelector);
-  // #region Selectors
-
-  const bottomMessage = useSelector(
-    (state: RootState) => state.uiState.bottomMessage,
-  );
-  const displayBottomMessageOnBottom = useSelector(
-    (state: RootState) => state.uiState.displayBottomMessageOnBottom,
-  );
-
   const timeline = useSelector((state: RootState) => state.state.history);
-
-  // #endregion
 
   useEffect(() => {
     const handleKeyDown = (event: any) => {
@@ -157,7 +99,7 @@ const Layout = () => {
   );
 
   useWebviewListener("openSettings", async () => {
-    postToIde("openConfigJson", undefined);
+    ideMessenger.post("openConfigJson", undefined);
   });
 
   useWebviewListener(
@@ -173,28 +115,51 @@ const Layout = () => {
     [location, navigate],
   );
 
-  useWebviewListener("indexProgress", async (data) => {
-    setIndexingProgress(data.progress);
-    setIndexingTask(data.desc);
-  });
+  useWebviewListener(
+    "incrementFtc",
+    async () => {
+      const u = getLocalStorage("ftc");
+      if (u) {
+        setLocalStorage("ftc", u + 1);
+      } else {
+        setLocalStorage("ftc", 1);
+      }
+    },
+    [],
+  );
+
+  useWebviewListener(
+    "updateApplyState",
+    async (state) => {
+      dispatch(updateApplyState(state));
+    },
+    [],
+  );
+
+  useWebviewListener(
+    "openOnboardingCard",
+    async () => {
+      onboardingCard.open("Best");
+    },
+    [],
+  );
+
+  useWebviewListener(
+    "setupLocalConfig",
+    async () => {
+      onboardingCard.open("Local");
+    },
+    [],
+  );
 
   useEffect(() => {
-    const onboardingComplete = getLocalStorage("onboardingComplete");
     if (
-      !onboardingComplete &&
-      !location.pathname.startsWith("/onboarding") &&
-      !location.pathname.startsWith("/existingUserOnboarding")
+      isNewUserOnboarding() &&
+      (location.pathname === "/" || location.pathname === "/index.html")
     ) {
-      if (getLocalStorage("mainTextEntryCounter")) {
-        navigate("/existingUserOnboarding");
-      } else {
-        navigate("/onboarding");
-      }
+      onboardingCard.open("Quickstart");
     }
   }, [location]);
-
-  const [indexingProgress, setIndexingProgress] = useState(1);
-  const [indexingTask, setIndexingTask] = useState("Indexing Codebase");
 
   return (
     <LayoutTopDiv>
@@ -218,93 +183,17 @@ const Layout = () => {
         />
 
         <GridDiv>
+          <PostHogPageView />
           <Outlet />
-          <DropdownPortalDiv id="model-select-top-div"></DropdownPortalDiv>
-          <Footer>
-            <div className="mr-auto flex gap-2 items-center">
-              {/* {localStorage.getItem("ide") === "jetbrains" ||
-                localStorage.getItem("hideFeature") === "true" || (
-                  <SparklesIcon
-                    className="cursor-pointer"
-                    onClick={() => {
-                      localStorage.setItem("hideFeature", "true");
-                    }}
-                    onMouseEnter={() => {
-                      dispatch(
-                        setBottomMessage(
-                          `🎁 New Feature: Use ${getMetaKeyLabel()}⇧R automatically debug errors in the terminal (you can click the sparkle icon to make it go away)`
-                        )
-                      );
-                    }}
-                    onMouseLeave={() => {
-                      dispatch(
-                        setBottomMessageCloseTimeout(
-                          setTimeout(() => {
-                            dispatch(setBottomMessage(undefined));
-                          }, 2000)
-                        )
-                      );
-                    }}
-                    width="1.3em"
-                    height="1.3em"
-                    color="yellow"
-                  />
-                )} */}
-              <ModelSelect />
-              {indexingProgress >= 1 && // Would take up too much space together with indexing progress
-                defaultModel?.provider === "free-trial" &&
-                (location.pathname === "/settings" ||
-                  parseInt(localStorage.getItem("ftc") || "0") >= 125) && (
-                  <ProgressBar
-                    completed={parseInt(localStorage.getItem("ftc") || "0")}
-                    total={250}
-                  />
-                )}
-
-              {isJetBrains() || (
-                <IndexingProgressBar
-                  currentlyIndexing={indexingTask}
-                  completed={indexingProgress * 100}
-                  total={100}
-                />
-              )}
-            </div>
-            <HeaderButtonWithText
-              text="Help"
-              onClick={() => {
-                navigate("/help");
-              }}
-            >
-              <QuestionMarkCircleIcon width="1.4em" height="1.4em" />
-            </HeaderButtonWithText>
-            <HeaderButtonWithText
-              onClick={() => {
-                // navigate("/settings");
-                postToIde("openConfigJson", undefined);
-              }}
-              text="Configure Continue"
-            >
-              <Cog6ToothIcon width="1.4em" height="1.4em" />
-            </HeaderButtonWithText>
-          </Footer>
+          <ModelDropdownPortalDiv id="model-select-top-div"></ModelDropdownPortalDiv>
+          <ProfileDropdownPortalDiv id="profile-select-top-div"></ProfileDropdownPortalDiv>
+          <Footer />
         </GridDiv>
-
-        <BottomMessageDiv
-          displayOnBottom={displayBottomMessageOnBottom}
-          onMouseEnter={() => {
-            dispatch(setBottomMessageCloseTimeout(undefined));
-          }}
-          onMouseLeave={(e) => {
-            if (!e.buttons) {
-              dispatch(setBottomMessage(undefined));
-            }
-          }}
-          hidden={!bottomMessage}
-        >
-          {bottomMessage}
-        </BottomMessageDiv>
       </div>
-      <div className="text-sm" id="tooltip-portal-div" />
+      <div
+        style={{ fontSize: `${getFontSize() - 4}px` }}
+        id="tooltip-portal-div"
+      />
     </LayoutTopDiv>
   );
 };

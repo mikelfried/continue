@@ -1,15 +1,14 @@
 import { JSONContent } from "@tiptap/react";
 import {
   ContextItemWithId,
+  DefaultContextProvider,
   InputModifiers,
   MessageContent,
   MessagePart,
   RangeInFile,
 } from "core";
-import { stripImages } from "core/llm/countTokens";
-import { getBasename } from "core/util";
-import { ideRequest } from "../../util/ide";
-import { WebviewIde } from "../../util/webviewIde";
+import { stripImages } from "core/llm/images";
+import { IIdeMessenger } from "../../context/IdeMessenger";
 
 interface MentionAttrs {
   label: string;
@@ -28,6 +27,8 @@ interface MentionAttrs {
 async function resolveEditorContent(
   editorState: JSONContent,
   modifiers: InputModifiers,
+  ideMessenger: IIdeMessenger,
+  defaultContextProviders: DefaultContextProvider[],
 ): Promise<[ContextItemWithId[], RangeInFile[], MessageContent]> {
   let parts: MessagePart[] = [];
   let contextItemAttrs: MentionAttrs[] = [];
@@ -42,6 +43,9 @@ async function resolveEditorContent(
       if (foundSlashCommand && typeof slashCommand === "undefined") {
         slashCommand = foundSlashCommand;
       }
+
+      contextItemAttrs.push(...ctxItems);
+
       if (text === "") {
         continue;
       }
@@ -51,11 +55,14 @@ async function resolveEditorContent(
       } else {
         parts.push({ type: "text", text });
       }
-      contextItemAttrs.push(...ctxItems);
     } else if (p.type === "codeBlock") {
       if (!p.attrs.item.editing) {
         const text =
-          "```" + p.attrs.item.name + "\n" + p.attrs.item.content + "\n```";
+          "```" +
+          p.attrs.item.description +
+          "\n" +
+          p.attrs.item.content +
+          "\n```";
         if (parts[parts.length - 1]?.type === "text") {
           parts[parts.length - 1].text += "\n" + text;
         } else {
@@ -93,30 +100,15 @@ async function resolveEditorContent(
   let contextItemsText = "";
   let contextItems: ContextItemWithId[] = [];
   for (const item of contextItemAttrs) {
-    if (item.itemType === "file") {
-      const ide = new WebviewIde();
-      // This is a quick way to resolve @file references
-      const basename = getBasename(item.id);
-      const rawContent = await ide.readFile(item.id);
-      const content = `\`\`\`title="${basename}"\n${rawContent}\n\`\`\`\n`;
-      contextItemsText += content;
-      contextItems.push({
-        name: basename,
-        description: item.id,
-        content,
-        id: {
-          providerTitle: "file",
-          itemId: item.id,
-        },
-      });
-    } else {
-      const data = {
-        name: item.itemType === "contextProvider" ? item.id : item.itemType,
-        query: item.query,
-        fullInput: stripImages(parts),
-        selectedCode,
-      };
-      const resolvedItems = await ideRequest("context/getContextItems", data);
+    const data = {
+      name: item.itemType === "contextProvider" ? item.id : item.itemType,
+      query: item.query,
+      fullInput: stripImages(parts),
+      selectedCode,
+    };
+    const result = await ideMessenger.request("context/getContextItems", data);
+    if (result.status === "success") {
+      const resolvedItems = result.content;
       contextItems.push(...resolvedItems);
       for (const resolvedItem of resolvedItems) {
         contextItemsText += resolvedItem.content + "\n\n";
@@ -126,17 +118,39 @@ async function resolveEditorContent(
 
   // cmd+enter to use codebase
   if (modifiers.useCodebase) {
-    const codebaseItems = await ideRequest("context/getContextItems", {
+    const result = await ideMessenger.request("context/getContextItems", {
       name: "codebase",
       query: "",
       fullInput: stripImages(parts),
       selectedCode,
     });
-    contextItems.push(...codebaseItems);
-    for (const codebaseItem of codebaseItems) {
-      contextItemsText += codebaseItem.content + "\n\n";
+
+    if (result.status === "success") {
+      const codebaseItems = result.content;
+      contextItems.push(...codebaseItems);
+      for (const codebaseItem of codebaseItems) {
+        contextItemsText += codebaseItem.content + "\n\n";
+      }
     }
   }
+
+  // Include default context providers
+  const defaultContextItems = await Promise.all(
+    defaultContextProviders.map(async (provider) => {
+      const result = await ideMessenger.request("context/getContextItems", {
+        name: provider.name,
+        query: provider.query ?? "",
+        fullInput: stripImages(parts),
+        selectedCode,
+      });
+      if (result.status === "success") {
+        return result.content;
+      } else {
+        return [];
+      }
+    }),
+  );
+  contextItems.push(...defaultContextItems.flat());
 
   if (contextItemsText !== "") {
     contextItemsText += "\n";
@@ -191,6 +205,32 @@ function resolveParagraph(p: JSONContent): [string, MentionAttrs[], string] {
     }
   }
   return [text, contextItems, slashCommand];
+}
+
+export function hasSlashCommandOrContextProvider(
+  editorState: JSONContent,
+): boolean {
+  if (!editorState.content) {
+    return false;
+  }
+
+  for (const p of editorState.content) {
+    if (p.type === "paragraph" && p.content) {
+      for (const child of p.content) {
+        if (child.type === "slashcommand") {
+          return true;
+        }
+        if (
+          child.type === "mention" &&
+          child.attrs?.itemType === "contextProvider"
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 export default resolveEditorContent;

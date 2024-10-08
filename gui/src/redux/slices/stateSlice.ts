@@ -7,95 +7,51 @@ import {
   ContextItemId,
   ContextItemWithId,
   PersistedSessionInfo,
+  PromptLog,
 } from "core";
 import { BrowserSerializedContinueConfig } from "core/config/load";
-import { stripImages } from "core/llm/countTokens";
+import { stripImages } from "core/llm/images";
+import { createSelector } from "reselect";
 import { v4 } from "uuid";
+import { RootState } from "../store";
+import { v4 as uuidv4 } from "uuid";
 
-const TEST_CONTEXT_ITEMS: ContextItemWithId[] = [
-  {
-    content: "def add(a, b):\n  return a + b",
-    description: "test.py",
-    name: "test.py",
+export const memoizedContextItemsSelector = createSelector(
+  [(state: RootState) => state.state.history],
+  (history) => {
+    return history.reduce<ContextItemWithId[]>((acc, item) => {
+      acc.push(...item.contextItems);
+      return acc;
+    }, []);
+  },
+);
 
-    id: {
-      itemId: "test.py",
-      providerTitle: "file",
-    },
-  },
-  {
-    content: "function add(a, b) {\n  return a + b\n}",
-
-    description: "test.js",
-    name: "test.js",
-    id: {
-      itemId: "test.js",
-      providerTitle: "file",
-    },
-  },
-];
-
-const TEST_TIMELINE: ChatHistory = [
-  {
-    message: {
-      role: "user",
-      content: "Hi, please write bubble sort in python",
-    },
-    contextItems: [],
-  },
-  {
-    message: {
-      role: "assistant",
-      content: `\`\`\`python
-def bubble_sort(arr):
-  n = len(arr)
-  for i in range(n):
-      for j in range(0, n - i - 1):
-          if arr[j] > arr[j + 1]:
-              arr[j], arr[j + 1] = arr[j + 1], arr[j]
-              return arr
-\`\`\``,
-    },
-    contextItems: [],
-  },
-  {
-    message: { role: "user", content: "Now write it in Rust" },
-    contextItems: [],
-  },
-  {
-    message: {
-      role: "assistant",
-      content: `Sure, here's bubble sort written in rust: \n\`\`\`rust
-fn bubble_sort<T: Ord>(values: &mut[T]) {
-  let len = values.len();
-  for i in 0..len {
-      for j in 0..(len - i - 1) {
-          if values[j] > values[j + 1] {
-              values.swap(j, j + 1);
-          }
-      }
-  }
-}
-\`\`\`\nIs there anything else I can answer?`,
-    },
-    contextItems: [],
-  },
-];
+// We need this to handle reorderings (e.g. a mid-array deletion) of the messages array.
+// The proper fix is adding a UUID to all chat messages, but this is the temp workaround.
+type ChatHistoryItemWithMessageId = ChatHistoryItem & {
+  message: ChatMessage & { id: string };
+};
 
 type State = {
-  history: ChatHistory;
+  history: ChatHistoryItemWithMessageId[];
   contextItems: ContextItemWithId[];
+  ttsActive: boolean;
   active: boolean;
+  isGatheringContext: boolean;
   config: BrowserSerializedContinueConfig;
   title: string;
   sessionId: string;
   defaultModelTitle: string;
+  mainEditorContent?: JSONContent;
+  selectedProfileId: string;
 };
 
 const initialState: State = {
   history: [],
   contextItems: [],
+  ttsActive: false,
   active: false,
+  isGatheringContext: false,
   config: {
     slashCommands: [
       {
@@ -108,7 +64,7 @@ const initialState: State = {
       },
       {
         name: "share",
-        description: "Download and share this session",
+        description: "Export the current chat session to markdown",
       },
       {
         name: "cmd",
@@ -116,42 +72,12 @@ const initialState: State = {
       },
     ],
     contextProviders: [],
-    models: [
-      {
-        title: "GPT-4 Vision (Free Trial)",
-        provider: "free-trial",
-        model: "gpt-4-vision-preview",
-      },
-      {
-        title: "GPT-3.5-Turbo (Free Trial)",
-        provider: "free-trial",
-        model: "gpt-3.5-turbo",
-      },
-      {
-        title: "Gemini Pro (Free Trial)",
-        provider: "free-trial",
-        model: "gemini-pro",
-      },
-      {
-        title: "Codellama 70b (Free Trial)",
-        provider: "free-trial",
-        model: "codellama-70b",
-      },
-      {
-        title: "Mixtral (Free Trial)",
-        provider: "free-trial",
-        model: "mistral-8x7b",
-      },
-      {
-        title: "Claude 3 Sonnet (Free Trial)",
-        provider: "free-trial",
-        model: "claude-3-sonnet-20240229",
-      },
-    ],
+    models: [],
   },
   title: "New Session",
   sessionId: v4(),
   defaultModelTitle: "GPT-4",
+  selectedProfileId: "local",
 };
 
 export const stateSlice = createSlice({
@@ -164,13 +90,15 @@ export const stateSlice = createSlice({
     ) => {
       const defaultModelTitle =
         config.models.find((model) => model.title === state.defaultModelTitle)
-          ?.title || config.models[0].title;
+          ?.title ||
+        config.models[0]?.title ||
+        "";
       state.config = config;
       state.defaultModelTitle = defaultModelTitle;
     },
     addPromptCompletionPair: (
       state,
-      { payload }: PayloadAction<[string, string][]>,
+      { payload }: PayloadAction<PromptLog[]>,
     ) => {
       if (!state.history.length) {
         return;
@@ -181,8 +109,25 @@ export const stateSlice = createSlice({
         ? lastHistory.promptLogs.concat(payload)
         : payload;
     },
+    setTTSActive: (state, { payload }: PayloadAction<boolean>) => {
+      state.ttsActive = payload;
+    },
     setActive: (state) => {
       state.active = true;
+    },
+    setIsGatheringContext: (state, { payload }: PayloadAction<boolean>) => {
+      state.isGatheringContext = payload;
+    },
+    clearLastResponse: (state) => {
+      if (state.history.length < 2) {
+        return;
+      }
+      state.mainEditorContent =
+        state.history[state.history.length - 2].editorState;
+      state.history = state.history.slice(0, -2);
+    },
+    consumeMainEditorContent: (state) => {
+      state.mainEditorContent = undefined;
     },
     setContextItemsAtIndex: (
       state,
@@ -236,6 +181,7 @@ export const stateSlice = createSlice({
       // Cut off history after the resubmitted message
       state.history = state.history.slice(0, payload.index + 1).concat({
         message: {
+          id: uuidv4(),
           role: "assistant",
           content: "",
         },
@@ -246,6 +192,10 @@ export const stateSlice = createSlice({
       // state.contextItems = [];
       state.active = true;
     },
+    deleteMessage: (state, action: PayloadAction<number>) => {
+      // Deletes the current assistant message and the previous user message
+      state.history.splice(action.payload - 1, 2);
+    },
     initNewActiveMessage: (
       state,
       {
@@ -255,12 +205,13 @@ export const stateSlice = createSlice({
       }>,
     ) => {
       state.history.push({
-        message: { role: "user", content: "" },
+        message: { role: "user", content: "", id: uuidv4() },
         contextItems: state.contextItems,
         editorState: payload.editorState,
       });
       state.history.push({
         message: {
+          id: uuidv4(),
           role: "assistant",
           content: "",
         },
@@ -282,7 +233,7 @@ export const stateSlice = createSlice({
     ) => {
       if (payload.index >= state.history.length) {
         state.history.push({
-          message: payload.message,
+          message: { ...payload.message, id: uuidv4() },
           editorState: {
             type: "doc",
             content: stripImages(payload.message.content)
@@ -296,7 +247,10 @@ export const stateSlice = createSlice({
         });
         return;
       }
-      state.history[payload.index].message = payload.message;
+      state.history[payload.index].message = {
+        ...payload.message,
+        id: uuidv4(),
+      };
       state.history[payload.index].contextItems = payload.contextItems || [];
     },
     addContextItemsAtIndex: (
@@ -315,6 +269,7 @@ export const stateSlice = createSlice({
       historyItem.contextItems.push(...payload.contextItems);
     },
     setInactive: (state) => {
+      state.isGatheringContext = false;
       state.active = false;
     },
     streamUpdate: (state, action: PayloadAction<string>) => {
@@ -328,7 +283,7 @@ export const stateSlice = createSlice({
       { payload }: PayloadAction<PersistedSessionInfo | undefined>,
     ) => {
       if (payload) {
-        state.history = payload.history;
+        state.history = payload.history as any;
         state.title = payload.title;
         state.sessionId = payload.sessionId;
       } else {
@@ -459,14 +414,23 @@ export const stateSlice = createSlice({
         };
       }
     },
-    setDefaultModel: (state, { payload }: PayloadAction<string>) => {
+    setDefaultModel: (
+      state,
+      { payload }: PayloadAction<{ title: string; force?: boolean }>,
+    ) => {
       const model = state.config.models.find(
-        (model) => model.title === payload,
+        (model) => model.title === payload.title,
       );
-      if (!model) return;
+      if (!model && !payload.force) return;
       return {
         ...state,
-        defaultModelTitle: payload,
+        defaultModelTitle: payload.title,
+      };
+    },
+    setSelectedProfileId: (state, { payload }: PayloadAction<string>) => {
+      return {
+        ...state,
+        selectedProfileId: payload,
       };
     },
   },
@@ -486,9 +450,16 @@ export const {
   setDefaultModel,
   setConfig,
   addPromptCompletionPair,
+  setTTSActive,
   setActive,
   setEditingContextItemAtIndex,
   initNewActiveMessage,
   setMessageAtIndex,
+  clearLastResponse,
+  consumeMainEditorContent,
+  setSelectedProfileId,
+  deleteMessage,
+  setIsGatheringContext,
 } = stateSlice.actions;
+
 export default stateSlice.reducer;

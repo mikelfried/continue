@@ -1,7 +1,8 @@
-import { BaseContextProvider } from "..";
-import { ContextProviderName } from "../..";
+import { ContextItem, ContextProviderName } from "../../";
+import { BaseContextProvider } from "../";
 import CodeContextProvider from "./CodeContextProvider";
-import CodebaseContextProvider from "./CodebaseContextProvider";
+import ContinueProxyContextProvider from "./ContinueProxyContextProvider";
+import CurrentFileContextProvider from "./CurrentFileContextProvider";
 import DatabaseContextProvider from "./DatabaseContextProvider";
 import DiffContextProvider from "./DiffContextProvider";
 import DocsContextProvider from "./DocsContextProvider";
@@ -11,7 +12,7 @@ import GitHubIssuesContextProvider from "./GitHubIssuesContextProvider";
 import GitLabMergeRequestContextProvider from "./GitLabMergeRequestContextProvider";
 import GoogleContextProvider from "./GoogleContextProvider";
 import HttpContextProvider from "./HttpContextProvider";
-import JiraIssuesContextProvider from "./JiraIssuesContextProvider";
+import JiraIssuesContextProvider from "./JiraIssuesContextProvider/";
 import LocalsProvider from "./LocalsProvider";
 import OSContextProvider from "./OSContextProvider";
 import OpenFilesContextProvider from "./OpenFilesContextProvider";
@@ -19,8 +20,18 @@ import PostgresContextProvider from "./PostgresContextProvider";
 import ProblemsContextProvider from "./ProblemsContextProvider";
 import SearchContextProvider from "./SearchContextProvider";
 import TerminalContextProvider from "./TerminalContextProvider";
+import URLContextProvider from "./URLContextProvider";
+import RepoMapContextProvider from "./RepoMapContextProvider";
+import GreptileContextProvider from "./GreptileContextProvider";
 
-const Providers: (typeof BaseContextProvider)[] = [
+/**
+ * Note: We are currently omitting the following providers due to bugs:
+ * - `CodeOutlineContextProvider`
+ * - `CodeHighlightsContextProvider`
+ *
+ * See this issue for details: https://github.com/continuedev/continue/issues/1365
+ */
+export const Providers: (typeof BaseContextProvider)[] = [
   DiffContextProvider,
   FileTreeContextProvider,
   GitHubIssuesContextProvider,
@@ -31,27 +42,23 @@ const Providers: (typeof BaseContextProvider)[] = [
   HttpContextProvider,
   SearchContextProvider,
   OSContextProvider,
-  CodebaseContextProvider,
   ProblemsContextProvider,
   FolderContextProvider,
   DocsContextProvider,
   GitLabMergeRequestContextProvider,
-  // CodeHighlightsContextProvider,
-  // CodeOutlineContextProvider,
   JiraIssuesContextProvider,
   PostgresContextProvider,
   DatabaseContextProvider,
   CodeContextProvider,
+  CurrentFileContextProvider,
+  URLContextProvider,
+  ContinueProxyContextProvider,
+  RepoMapContextProvider,
+  GreptileContextProvider,
 ];
 
 export function contextProviderClassFromName(
   name: ContextProviderName,
 ): typeof BaseContextProvider | undefined {
-  const cls = Providers.find((cls) => cls.description.title === name);
-
-  if (!cls) {
-    return undefined;
-  }
-
-  return cls;
+  return Providers.find((cls) => cls.description.title === name);
 }

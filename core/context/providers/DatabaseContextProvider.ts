@@ -1,11 +1,12 @@
-import { BaseContextProvider } from "..";
 import {
   ContextItem,
   ContextProviderDescription,
   ContextProviderExtras,
   ContextSubmenuItem,
   LoadSubmenuItemsArgs,
-} from "../..";
+} from "../../index.js";
+import { BaseContextProvider } from "../index.js";
+import { getDatabaseAdapter } from "dbinfoz";
 
 class DatabaseContextProvider extends BaseContextProvider {
   static description: ContextProviderDescription = {
@@ -13,6 +14,7 @@ class DatabaseContextProvider extends BaseContextProvider {
     displayTitle: "Database",
     description: "Table schemas",
     type: "submenu",
+    renderInlineAs: "",
   };
 
   async getContextItems(
@@ -27,12 +29,11 @@ class DatabaseContextProvider extends BaseContextProvider {
       return contextItems;
     }
 
-    let [connectionName, table] = query.split(".");
-
-    const getDatabaseAdapter = await require("dbinfoz");
+    const [connectionName, table] = query.split(".");
 
     for (const connection of connections) {
-      if (connection.name == connectionName) {
+      if (connection.name === connectionName) {
+        // @ts-ignore (incorrect typings on module's declaration file)
         const adapter = getDatabaseAdapter(
           connection.connection_type,
           connection.connection,
@@ -45,9 +46,9 @@ class DatabaseContextProvider extends BaseContextProvider {
           let prompt = `Schema for all tables on ${connection.connection_type} is `;
           prompt += JSON.stringify(tablesAndSchemas);
 
-          let contextItem = {
+          const contextItem = {
             name: `${connectionName}-all-tables-schemas`,
-            description: `Schema for all tables.`,
+            description: "Schema for all tables.",
             content: prompt,
           };
 
@@ -60,7 +61,7 @@ class DatabaseContextProvider extends BaseContextProvider {
               let prompt = `Schema for ${tableName} on ${connection.connection_type} is `;
               prompt += JSON.stringify(tablesAndSchemas[tableName]);
 
-              let contextItem = {
+              const contextItem = {
                 name: `${connectionName}-${tableName}-schema`,
                 description: `${tableName} Schema`,
                 content: prompt,
@@ -86,10 +87,9 @@ class DatabaseContextProvider extends BaseContextProvider {
       return contextItems;
     }
 
-    const getDatabaseAdapter = await require("dbinfoz");
-
     for (const connection of connections) {
-      let adapter = getDatabaseAdapter(
+      // @ts-ignore (incorrect typings on module's declaration file)
+      const adapter = getDatabaseAdapter(
         connection.connection_type,
         connection.connection,
       );
@@ -98,19 +98,19 @@ class DatabaseContextProvider extends BaseContextProvider {
       );
       const tables = Object.keys(tablesAndSchemas);
 
-      let contextItem = {
+      const contextItem = {
         id: `${connection.name}.all`,
         title: `${connection.name} all table schemas`,
-        description: ``,
+        description: "",
       };
 
       contextItems.push(contextItem);
 
       tables.forEach((tableName) => {
-        let contextItem = {
+        const contextItem = {
           id: `${connection.name}.${tableName}`,
           title: `${connection.name}.${tableName} schema`,
-          description: ``,
+          description: "",
         };
 
         contextItems.push(contextItem);

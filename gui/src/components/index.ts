@@ -1,7 +1,5 @@
-import { Tooltip } from "react-tooltip";
 import styled, { keyframes } from "styled-components";
-import { getFontSize } from "../util";
-import { isJetBrains } from "../util/ide";
+import { getFontSize, isJetBrains } from "../util";
 
 export const VSC_INPUT_BACKGROUND_VAR = "--vscode-input-background";
 export const VSC_BACKGROUND_VAR = "--vscode-sideBar-background";
@@ -40,8 +38,8 @@ export const VSC_THEME_COLOR_VARS = [
 ];
 
 export const defaultBorderRadius = "5px";
-export const lightGray = "#646464";
-export const greenButtonColor = "#1bbe84";
+export const lightGray = "#999998";
+export const greenButtonColor = "#189e72";
 
 export const vscInputBackground = `var(${VSC_INPUT_BACKGROUND_VAR}, rgb(45 45 45))`;
 export const vscQuickInputBackground = `var(${VSC_QUICK_INPUT_BACKGROUND_VAR}, ${VSC_INPUT_BACKGROUND_VAR}, rgb(45 45 45))`;
@@ -126,11 +124,13 @@ export const Button = styled.button`
   border-radius: ${defaultBorderRadius};
 
   border: none;
-  color: ${vscForeground};
-  background-color: ${vscButtonBackground};
+  color: ${vscBackground};
+  background-color: ${vscForeground};
 
   &:disabled {
-    color: gray;
+    color: ${vscBackground};
+    opacity: 0.5;
+    pointer-events: none;
   }
 
   &:hover:enabled {
@@ -139,18 +139,59 @@ export const Button = styled.button`
   }
 `;
 
-export const StyledTooltip = styled(Tooltip)`
-  font-size: 12px;
-  background-color: ${vscEditorBackground};
-  color: ${vscForeground};
+export const SecondaryButton = styled.button`
+  padding: 10px 12px;
+  margin: 8px 0;
+  height: 2.5rem;
   border-radius: ${defaultBorderRadius};
-  box-shadow: 0 0 1px 0 ${vscForeground};
-  padding: 2px;
-  padding-left: 4px;
-  padding-right: 4px;
-  z-index: 1000;
 
-  max-width: 80vw;
+  border: 1px solid ${vscForeground};
+  color: ${vscForeground};
+  background-color: inherit;
+
+  &:disabled {
+    color: gray;
+  }
+
+  &:hover:enabled {
+    cursor: pointer;
+    background-color: ${vscBackground};
+    opacity: 0.9;
+  }
+`;
+
+export const InputSubtext = styled.span`
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: ${lightGray};
+  margin-top: 0.25rem;
+`;
+
+export const ButtonSubtext = styled.span`
+  display: block;
+  margin-top: 0;
+  text-align: center;
+  color: ${lightGray};
+`;
+
+export const CustomScrollbarDiv = styled.div`
+  scrollbar-base-color: transparent;
+  scrollbar-width: thin;
+  background-color: ${vscBackground};
+
+  & * {
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    ::-webkit-scrollbar:horizontal {
+      height: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      border-radius: 2px;
+    }
+  }
 `;
 
 export const TextArea = styled.textarea`
@@ -205,11 +246,17 @@ export const Hr = styled.hr`
   border: 0.5px solid ${lightGray};
 `;
 
+export const HelperText = styled.p`
+  margin-top: 2.5px;
+  font-size: ${getFontSize() - 2}px;
+  color: ${lightGray};
+`;
+
 export const Input = styled.input`
   width: 100%;
   padding: 8px 12px;
-  margin: 8px 0;
   box-sizing: border-box;
+  margin: 4px 0px;
   border-radius: ${defaultBorderRadius};
   outline: 1px solid ${lightGray};
   border: none;
@@ -218,7 +265,7 @@ export const Input = styled.input`
 
   &:focus {
     background: ${vscInputBackground};
-    outline: 1px solid ${vscFocusBorder};
+    outline: 1px solid ${lightGray};
   }
 
   &:invalid {
@@ -282,18 +329,6 @@ export const MainContainerWithBorder = styled.div<{ borderWidth?: string }>`
   background-color: white;
 `;
 
-export const MainTextInput = styled.textarea`
-  padding: 8px;
-  font-size: 16px;
-  border-radius: ${defaultBorderRadius};
-  border: 1px solid #ccc;
-  margin: 8px 8px;
-  background-color: ${vscBackground};
-  color: ${vscForeground};
-  outline: 1px solid orange;
-  resize: none;
-`;
-
 export const appear = keyframes`
     from {
         opacity: 0;
@@ -305,9 +340,14 @@ export const appear = keyframes`
     }
 `;
 
-export const HeaderButton = styled.button<{ inverted: boolean | undefined }>`
-  background-color: ${({ inverted }) =>
-    inverted ? vscForeground : "transparent"};
+export const HeaderButton = styled.button<{
+  inverted: boolean | undefined;
+  backgroundColor?: string;
+  hoverBackgroundColor?: string;
+}>`
+  background-color: ${({ inverted, backgroundColor }) => {
+    return backgroundColor ?? (inverted ? vscForeground : "transparent");
+  }};
   color: ${({ inverted }) => (inverted ? vscBackground : vscForeground)};
 
   border: none;
@@ -320,9 +360,9 @@ export const HeaderButton = styled.button<{ inverted: boolean | undefined }>`
   }
 
   &:hover {
-    background-color: ${({ inverted }) =>
+    background-color: ${({ inverted, hoverBackgroundColor }) =>
       typeof inverted === "undefined" || inverted
-        ? vscInputBackground
+        ? hoverBackgroundColor ?? vscInputBackground
         : "transparent"};
   }
   display: flex;
@@ -330,4 +370,61 @@ export const HeaderButton = styled.button<{ inverted: boolean | undefined }>`
   justify-content: center;
   gap: 4px;
   padding: 2px;
+`;
+
+export const Divider = styled.div`
+  height: 1px;
+  background-color: ${lightGray};
+`;
+
+export const StyledActionButton = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  transition: background-color 200ms;
+  border-radius: ${defaultBorderRadius};
+  padding: 2px 12px;
+  background-color: ${lightGray}33;
+  background-opacity: 0.1;
+
+  &:hover {
+    background-color: ${lightGray}55;
+  }
+`;
+
+export const CloseButton = styled.button`
+  border: none;
+  background-color: inherit;
+  color: ${lightGray};
+  position: absolute;
+  top: 0.6rem;
+  right: 1rem;
+  padding: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+`;
+
+export const AnimatedEllipsis = styled.span`
+  &::after {
+    content: ".";
+    animation: ellipsis 2.5s infinite;
+    display: inline-block;
+    width: 12px;
+    text-align: left;
+  }
+
+  @keyframes ellipsis {
+    0% {
+      content: ".";
+    }
+    33% {
+      content: "..";
+    }
+    66% {
+      content: "...";
+    }
+  }
 `;

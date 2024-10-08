@@ -12,23 +12,60 @@ ollama run starcoder:3b
 
 Once it has been downloaded, you should begin to see completions in VS Code.
 
+## Setting up with LM Studio
+
+You can also set up tab-autocomplete with a local LM Studio instance by following these steps:
+
+1. Download the latest version of LM Studio from [here](https://lmstudio.ai/)
+2. Download a model (e.g. search for `second-state/StarCoder2-3B-GGUF` and choose one of the options there)
+3. Go to the server section (button is on the left), select your model from the dropdown at the top, and click "Start Server"
+4. Go to the "My Models" section (button is on the left), find your selected model, and copy the name the path (example: `second-state/StarCoder2-3B-GGUF/starcoder2-3b-Q8_0.gguf`); this will be used as the "model" attribute in Continue
+5. Go to Continue and modify the configurations for a [custom model](#setting-up-a-custom-model)
+6. Set the "provider" to `lmstudio` and the "model" to the path copied earlier
+
+Example:
+
+```json title="config.json"
+{
+  "tabAutocompleteModel": {
+      "title": "Starcoder2 3b",
+      "model": "second-state/StarCoder2-3B-GGUF/starcoder2-3b-Q8_0.gguf",
+      "provider": "lmstudio",
+  },
+  ...
+}
+```
+
 ## Setting up a custom model
 
-All of the configuration options available for chat models are available to use for tab-autocomplete. For example, if you wanted to use a remote Ollama instance you would edit your `config.json` like this (note that it is not inside the models array):
+All of the configuration options available for chat models are available to use for tab-autocomplete. For example, if you wanted to use a remote vLLM instance you would edit your `config.json` like this (note that it is not inside the models array), filling in the correct model name and vLLM endpoint:
 
-```json title=~/.continue/config.json
+```json title="config.json"
 {
     "tabAutocompleteModel": {
         "title": "Tab Autocomplete Model",
-        "provider": "ollama",
-        "model": "starcoder:3b",
-        "apiBase": "https://<my endpoint>"
+        "provider": "openai",
+        "model": "<MODEL_NAME>",
+        "apiBase": "<VLLM_ENDPOINT_URL>"
     },
     ...
 }
 ```
 
-If you aren't yet familiar with the available options, you can learn more in our [overview](../model-setup/overview.md).
+As another example, say you want to use a different model, `deepseek-coder:6.7b-base`, with Ollama:
+
+```json title="config.json"
+{
+    "tabAutocompleteModel": {
+        "title": "Tab Autocomplete Model",
+        "provider": "ollama",
+        "model": "deepseek-coder:6.7b-base"
+    },
+    ...
+}
+```
+
+If you aren't yet familiar with the available options, you can learn more in our [overview](../setup/overview.md).
 
 ### What model should I use?
 
@@ -53,7 +90,7 @@ This is just another object like the ones in the `"models"` array of `config.jso
 This object allows you to customize the behavior of tab-autocomplete. The available options are:
 
 - `useCopyBuffer`: Determines whether the copy buffer will be considered when constructing the prompt. (Boolean)
-- `useSuffix`: Determines whether to use the file suffix in the prompt. (Boolean)
+- `useFileSuffix`: Determines whether to use the file suffix in the prompt. (Boolean)
 - `maxPromptTokens`: The maximum number of prompt tokens to use. A smaller number will yield faster completions, but less context. (Number)
 - `debounceDelay`: The delay in milliseconds before triggering autocomplete after a keystroke. (Number)
 - `maxSuffixPercentage`: The maximum percentage of the prompt that can be dedicated to the suffix. (Number)
@@ -63,7 +100,7 @@ This object allows you to customize the behavior of tab-autocomplete. The availa
 
 ### Full example
 
-```json title=~/.continue/config.json
+```json title="config.json"
 {
   "tabAutocompleteModel": {
     "title": "Tab Autocomplete Model",
@@ -94,7 +131,7 @@ Follow these steps to ensure that everything is set up correctly:
 3. Run `ollama run starcoder:3b` to verify that the model is downloaded.
 4. Make sure that any other completion providers are disabled (e.g. Copilot), as they may interfere.
 5. Make sure that you aren't also using another Ollama model for chat. This will cause Ollama to constantly load and unload the models from memory, resulting in slow responses (or none at all) for both.
-6. Check the output of the logs to find any potential errors (cmd/ctrl+shift+p -> "Toggle Developer Tools" -> "Console" tab in VS Code, ~/.continue/core.log in JetBrains).
+6. Check the output of the logs to find any potential errors (cmd/ctrl+shift+p -> "Toggle Developer Tools" -> "Console" tab in VS Code, ~/.continue/logs/core.log in JetBrains).
 7. If you are still having issues, please let us know in our [Discord](https://discord.gg/vapESyrFmJ) and we'll help as soon as possible.
 
 ### Completions are slow

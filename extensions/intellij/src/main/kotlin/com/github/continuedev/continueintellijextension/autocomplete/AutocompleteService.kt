@@ -4,9 +4,11 @@ import com.github.continuedev.continueintellijextension.`continue`.uuid
 import com.github.continuedev.continueintellijextension.services.ContinueExtensionSettings
 import com.github.continuedev.continueintellijextension.services.ContinuePluginService
 import com.google.gson.Gson
+import com.intellij.injected.editor.VirtualFileWindow
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.WriteAction
 import com.intellij.openapi.application.invokeLater
+import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.ServiceManager
 import com.intellij.openapi.components.service
@@ -14,17 +16,40 @@ import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.InlayProperties
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.wm.WindowManager
+import com.intellij.psi.PsiDocumentManager
+import com.intellij.psi.PsiElement
 
 data class PendingCompletion (
-    val editor: Editor,
-    val offset: Int,
-    val completionId: String,
-    val text: String?
+        val editor: Editor,
+        var offset: Int,
+        val completionId: String,
+        var text: String?
 )
+
+
+fun PsiElement.isInjectedText(): Boolean {
+    val virtualFile = this.containingFile.virtualFile ?: return false
+    if (virtualFile is VirtualFileWindow) {
+        return true
+    }
+    return false
+}
 
 @Service(Service.Level.PROJECT)
 class AutocompleteService(private val project: Project) {
     var pendingCompletion: PendingCompletion? = null;
+    private val autocompleteLookupListener = project.service<AutocompleteLookupListener>()
+    private var widget: AutocompleteSpinnerWidget? = null
+
+    // To avoid triggering another completion on partial acceptance,
+    // we need to keep track of whether the last change was a partial accept
+    var lastChangeWasPartialAccept = false
+
+    init {
+        val statusBar = WindowManager.getInstance().getStatusBar(project)
+        widget = statusBar.getWidget("AutocompleteSpinnerWidget") as? AutocompleteSpinnerWidget
+    }
 
     fun triggerCompletion(editor: Editor) {
         val settings =
@@ -41,6 +66,7 @@ class AutocompleteService(private val project: Project) {
         val completionId = uuid()
         val offset = editor.caretModel.primaryCaret.offset
         pendingCompletion = PendingCompletion(editor, offset, completionId, null)
+        widget?.setLoading(true)
 
         // Request a completion from the core
         val virtualFile = FileDocumentManager.getInstance().getFile(editor.document)
@@ -62,12 +88,13 @@ class AutocompleteService(private val project: Project) {
         val lineLength = lineEnd - lineStart
 
         project.service<ContinuePluginService>().coreMessenger?.request("autocomplete/complete", input, null, ({ response ->
-            val completions = Gson().fromJson(response, List::class.java)
+            widget?.setLoading(false)
+
+            val completions = response as List<*>
             if (completions.isNotEmpty()) {
                 val completion = completions[0].toString()
 
-                if (completion.lines().size === 1 || column >= lineLength) {
-                    // Do not render if completion is multi-line and caret is in middle of line
+                if (shouldRenderCompletion(completion, column, lineLength, editor)) {
                     renderCompletion(editor, offset, completion)
                     pendingCompletion = pendingCompletion?.copy(text = completion)
 
@@ -78,9 +105,44 @@ class AutocompleteService(private val project: Project) {
         }))
     }
 
+    private fun shouldRenderCompletion(completion: String, column: Int, lineLength: Int, editor: Editor): Boolean {
+        if (completion.isEmpty()) {
+            return false
+        }
+
+        // Check if completion matches the first 10 characters after the cursor
+        val document = editor.document
+        val caretOffset = editor.caretModel.offset
+        val textAfterCursor = if (caretOffset + 10 <= document.textLength) {
+            document.getText(com.intellij.openapi.util.TextRange(caretOffset, caretOffset + 10))
+        } else {
+            document.getText(com.intellij.openapi.util.TextRange(caretOffset, document.textLength))
+        }
+
+        if (completion.startsWith(textAfterCursor)) {
+            return false
+        }
+
+        // Do not render if completion is multi-line and caret is in middle of line
+        return completion.lines().size > 1 && column < lineLength
+    }
+
     private fun renderCompletion(editor: Editor, offset: Int, text: String) {
+        if (text.isEmpty()) {
+            return
+        }
+
+        if (isInjectedFile(editor)) return
+
+        // Don't render completions when code completion dropdown is visible
+        if (!autocompleteLookupListener.isLookupEmpty()) {
+            return
+        }
         ApplicationManager.getApplication().invokeLater {
             WriteAction.run<Throwable> {
+                // Clear existing completions
+                hideCompletions(editor)
+
                 val properties = InlayProperties()
                 properties.relatesToPrecedingText(true)
                 properties.disableSoftWrapping(true)
@@ -107,7 +169,9 @@ class AutocompleteService(private val project: Project) {
         val editor = completion.editor
         val offset = completion.offset
         editor.document.insertString(offset, text)
+
         editor.caretModel.moveToOffset(offset + text.length)
+
 
         project.service<ContinuePluginService>().coreMessenger?.request("autocomplete/accept", completion.completionId, null, ({}))
         invokeLater {
@@ -115,16 +179,92 @@ class AutocompleteService(private val project: Project) {
         }
     }
 
+    private fun splitKeepingDelimiters(input: String, delimiterPattern: String = "\\s+"): List<String> {
+    val initialSplit = input.split("(?<=$delimiterPattern)|(?=$delimiterPattern)".toRegex())
+                .filter { it.isNotEmpty() }
+
+    val result = mutableListOf<String>()
+    var currentDelimiter = ""
+
+    for (part in initialSplit) {
+        if (part.matches(delimiterPattern.toRegex())) {
+            currentDelimiter += part
+        } else {
+            if (currentDelimiter.isNotEmpty()) {
+                result.add(currentDelimiter)
+                currentDelimiter = ""
+    }
+            result.add(part)
+        }
+    }
+
+    if (currentDelimiter.isNotEmpty()) {
+        result.add(currentDelimiter)
+
+    }
+
+    return result
+}
+
+    fun partialAccept() {
+        val completion = pendingCompletion ?: return
+        val text = completion.text ?: return
+        val editor = completion.editor
+        val offset = completion.offset
+
+        lastChangeWasPartialAccept = true
+
+        // Split the text into words, keeping delimiters
+        val words = splitKeepingDelimiters(text)
+        println(words)
+        val word = words[0]
+        editor.document.insertString(offset, word)
+        editor.caretModel.moveToOffset(offset + word.length)
+
+        // Remove the completion and re-display it
+        hideCompletions(editor)
+        completion.text = text.substring(word.length)
+        completion.offset += word.length
+        renderCompletion(editor, completion.offset, completion.text!!)
+    }
+
     private fun cancelCompletion(completion: PendingCompletion) {
         // Send cancellation message to core
+        widget?.setLoading(false)
         project.service<ContinuePluginService>().coreMessenger?.request("autocomplete/cancel", null,null, ({}))
     }
 
     fun clearCompletions(editor: Editor) {
+        if (isInjectedFile(editor)) return
+
         if (pendingCompletion != null) {
             cancelCompletion(pendingCompletion!!)
             pendingCompletion = null
         }
+        editor.inlayModel.getInlineElementsInRange(0, editor.document.textLength).forEach {
+            if (it.renderer is ContinueCustomElementRenderer) {
+                it.dispose()
+            }
+        }
+        editor.inlayModel.getBlockElementsInRange(0, editor.document.textLength).forEach {
+            if (it.renderer is ContinueMultilineCustomElementRenderer) {
+                it.dispose()
+            }
+        }
+    }
+
+    private fun isInjectedFile(editor: Editor): Boolean {
+        val psiFile = runReadAction { PsiDocumentManager.getInstance(project).getPsiFile(editor.document) }
+        if (psiFile == null) {
+            return false
+        }
+        val response = runReadAction { psiFile.isInjectedText() }
+        return response
+    }
+
+    fun hideCompletions(editor: Editor) {
+        if (isInjectedFile(editor)) return
+
         editor.inlayModel.getInlineElementsInRange(0, editor.document.textLength).forEach {
             if (it.renderer is ContinueCustomElementRenderer) {
                 it.dispose()

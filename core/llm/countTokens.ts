@@ -1,16 +1,61 @@
 import { Tiktoken, encodingForModel as _encodingForModel } from "js-tiktoken";
-// @ts-ignore
-import llamaTokenizer from "llama-tokenizer-js";
-import { ChatMessage, MessageContent, MessagePart } from "..";
-import { autodetectTemplateType } from "./autodetect";
-import { TOKEN_BUFFER_FOR_SAFETY } from "./constants";
-
+import { ChatMessage, MessageContent, MessagePart } from "../index.js";
+import {
+  AsyncEncoder,
+  GPTAsyncEncoder,
+  LlamaAsyncEncoder,
+} from "./asyncEncoder.js";
+import { autodetectTemplateType } from "./autodetect.js";
+import { TOKEN_BUFFER_FOR_SAFETY } from "./constants.js";
+import { stripImages } from "./images.js";
+import llamaTokenizer from "./llamaTokenizer.js";
 interface Encoding {
   encode: Tiktoken["encode"];
   decode: Tiktoken["decode"];
 }
 
+class LlamaEncoding implements Encoding {
+  encode(text: string): number[] {
+    return llamaTokenizer.encode(text);
+  }
+
+  decode(tokens: number[]): string {
+    return llamaTokenizer.decode(tokens);
+  }
+}
+
+class NonWorkerAsyncEncoder implements AsyncEncoder {
+  constructor(private readonly encoding: Encoding) {}
+
+  async close(): Promise<void> {}
+
+  async encode(text: string): Promise<number[]> {
+    return this.encoding.encode(text);
+  }
+
+  async decode(tokens: number[]): Promise<string> {
+    return this.encoding.decode(tokens);
+  }
+}
+
 let gptEncoding: Encoding | null = null;
+const gptAsyncEncoder = new GPTAsyncEncoder();
+const llamaEncoding = new LlamaEncoding();
+const llamaAsyncEncoder = new LlamaAsyncEncoder();
+
+function asyncEncoderForModel(modelName: string): AsyncEncoder {
+  // Temporary due to issues packaging the worker files
+  if (process.env.IS_BINARY) {
+    const encoding = encodingForModel(modelName);
+    return new NonWorkerAsyncEncoder(encoding);
+  }
+
+  const modelType = autodetectTemplateType(modelName);
+  if (!modelType || modelType === "none") {
+    return gptAsyncEncoder;
+  }
+  return llamaAsyncEncoder;
+}
 
 function encodingForModel(modelName: string): Encoding {
   const modelType = autodetectTemplateType(modelName);
@@ -23,21 +68,38 @@ function encodingForModel(modelName: string): Encoding {
     return gptEncoding;
   }
 
-  return llamaTokenizer;
+  return llamaEncoding;
 }
 
 function countImageTokens(content: MessagePart): number {
   if (content.type === "imageUrl") {
     return 85;
-  } else {
-    throw new Error("Non-image content type");
   }
+  throw new Error("Non-image content type");
+}
+
+async function countTokensAsync(
+  content: MessageContent,
+  // defaults to llama2 because the tokenizer tends to produce more tokens
+  modelName = "llama2",
+): Promise<number> {
+  const encoding = asyncEncoderForModel(modelName);
+  if (Array.isArray(content)) {
+    const promises = content.map(async (part) => {
+      if (part.type === "imageUrl") {
+        return countImageTokens(part);
+      }
+      return (await encoding.encode(part.text ?? "")).length;
+    });
+    return (await Promise.all(promises)).reduce((sum, val) => sum + val, 0);
+  }
+  return (await encoding.encode(content ?? "")).length;
 }
 
 function countTokens(
   content: MessageContent,
   // defaults to llama2 because the tokenizer tends to produce more tokens
-  modelName: string = "llama2",
+  modelName = "llama2",
 ): number {
   const encoding = encodingForModel(modelName);
   if (Array.isArray(content)) {
@@ -47,7 +109,7 @@ function countTokens(
         : encoding.encode(part.text ?? "", "all", []).length;
     }, 0);
   } else {
-    return encoding.encode(content, "all", []).length;
+    return encoding.encode(content ?? "", "all", []).length;
   }
 }
 
@@ -59,23 +121,12 @@ function flattenMessages(msgs: ChatMessage[]): ChatMessage[] {
       flattened.length > 0 &&
       flattened[flattened.length - 1].role === msg.role
     ) {
-      flattened[flattened.length - 1].content += "\n\n" + (msg.content || "");
+      flattened[flattened.length - 1].content += `\n\n${msg.content || ""}`;
     } else {
       flattened.push(msg);
     }
   }
   return flattened;
-}
-
-export function stripImages(content: MessageContent): string {
-  if (Array.isArray(content)) {
-    return content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
-  } else {
-    return content;
-  }
 }
 
 function countChatMessageTokens(
@@ -171,10 +222,9 @@ function pruneRawPromptFromBottom(
 
 function summarize(message: MessageContent): string {
   if (Array.isArray(message)) {
-    return stripImages(message).substring(0, 100) + "...";
-  } else {
-    return message.substring(0, 100) + "...";
+    return `${stripImages(message).substring(0, 100)}...`;
   }
+  return `${message.substring(0, 100)}...`;
 }
 
 function pruneChatHistory(
@@ -205,7 +255,7 @@ function pruneChatHistory(
   for (let i = 0; i < longerThanOneThird.length; i++) {
     // Prune line-by-line from the top
     const message = longerThanOneThird[i];
-    let content = stripImages(message.content);
+    const content = stripImages(message.content);
     const deltaNeeded = totalTokens - contextLength;
     const delta = Math.min(deltaNeeded, distanceFromThird[i]);
     message.content = pruneStringFromTop(
@@ -273,7 +323,7 @@ function pruneChatHistory(
 
 function compileChatMessages(
   modelName: string,
-  msgs: ChatMessage[] | undefined = undefined,
+  msgs: ChatMessage[] | undefined,
   contextLength: number,
   maxTokens: number,
   supportsImages: boolean,
@@ -282,7 +332,9 @@ function compileChatMessages(
   systemMessage: string | undefined = undefined,
 ): ChatMessage[] {
   const msgsCopy = msgs
-    ? msgs.map((msg) => ({ ...msg })).filter((msg) => msg.content !== "")
+    ? msgs
+        .map((msg) => ({ ...msg }))
+        .filter((msg) => msg.content !== "" && msg.role !== "system")
     : [];
 
   if (prompt) {
@@ -293,10 +345,24 @@ function compileChatMessages(
     msgsCopy.push(promptMsg);
   }
 
-  if (systemMessage && systemMessage.trim() !== "") {
+  if (
+    (systemMessage && systemMessage.trim() !== "") ||
+    msgs?.[0].role === "system"
+  ) {
+    let content = "";
+    if (msgs?.[0].role === "system") {
+      content = stripImages(msgs?.[0].content);
+    }
+    if (systemMessage && systemMessage.trim() !== "") {
+      const shouldAddNewLines = content !== "";
+      if (shouldAddNewLines) {
+        content += "\n\n";
+      }
+      content += systemMessage;
+    }
     const systemChatMsg: ChatMessage = {
       role: "system",
-      content: systemMessage,
+      content,
     };
     // Insert as second to last
     // Later moved to top, but want second-priority to last user message
@@ -350,6 +416,7 @@ function compileChatMessages(
 export {
   compileChatMessages,
   countTokens,
+  countTokensAsync,
   pruneLinesFromBottom,
   pruneLinesFromTop,
   pruneRawPromptFromTop,

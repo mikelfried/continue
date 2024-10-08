@@ -31,29 +31,25 @@ const val DEFAULT_CONFIG = """
   "slashCommands": [
     {
       "name": "edit",
-      "description": "Edit highlighted code",
-      "step": "EditHighlightedCodeStep"
+      "description": "Edit highlighted code"
     },
     {
       "name": "comment",
-      "description": "Write comments for the highlighted code",
-      "step": "CommentCodeStep"
+      "description": "Write comments for the highlighted code"
     },
     {
       "name": "share",
-      "description": "Download and share this session",
-      "step": "ShareSessionStep"
+      "description": "Export the current chat session to markdown"
     },
     {
       "name": "cmd",
-      "description": "Generate a shell command",
-      "step": "GenerateShellCommandStep"
+      "description": "Generate a shell command"
     }
   ],
   "customCommands": [
     {
       "name": "test",
-      "prompt": "Write a comprehensive set of unit tests for the selected code. It should setup, run tests that check for correctness including important edge cases, and teardown. Ensure that the tests are complete and sophisticated. Give the tests just as chat output, don't edit any file.",
+      "prompt": "{{{ input }}}\n\nWrite a comprehensive set of unit tests for the selected code. It should setup, run tests that check for correctness including important edge cases, and teardown. Ensure that the tests are complete and sophisticated. Give the tests just as chat output, don't edit any file.",
       "description": "Write unit tests for highlighted code"
     }
   ],
@@ -85,17 +81,32 @@ fun getContinueGlobalPath(): String {
     return continuePath.toString()
 }
 
-fun getConfigJsonPath(): String {
-    val path = Paths.get(getContinueGlobalPath(), "config.json")
+fun getContinueRemoteConfigPath(remoteHostname: String): String {
+    val path = Paths.get(getContinueGlobalPath(), ".configs")
+    if (Files.notExists(path)) {
+        Files.createDirectories(path)
+    }
+    return Paths.get(path.toString(), remoteHostname).toString()
+}
+
+
+fun getConfigJsonPath(remoteHostname: String? = null): String {
+    val path = Paths.get(
+        if (remoteHostname != null) getContinueRemoteConfigPath(remoteHostname) else getContinueGlobalPath(),
+        "config.json"
+    )
     if (Files.notExists(path)) {
         Files.createFile(path)
-        Files.writeString(path, DEFAULT_CONFIG);
+        Files.writeString(path, if (remoteHostname == null) DEFAULT_CONFIG else "{}")
     }
     return path.toString()
 }
 
-fun getConfigJsPath(): String {
-    val path = Paths.get(getContinueGlobalPath(), "config.js")
+fun getConfigJsPath(remoteHostname: String? = null): String {
+    val path = Paths.get(
+        if (remoteHostname != null) getContinueRemoteConfigPath(remoteHostname) else getContinueGlobalPath(),
+        "config.js"
+    )
     if (Files.notExists(path)) {
         Files.createFile(path)
         Files.writeString(path, DEFAULT_CONFIG_JS);

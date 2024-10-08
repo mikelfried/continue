@@ -1,12 +1,12 @@
-import { BaseLLM } from "..";
 import {
   ChatMessage,
   CompletionOptions,
   LLMOptions,
   ModelProvider,
-} from "../..";
-import { stripImages } from "../countTokens";
-import { streamResponse } from "../stream";
+} from "../../index.js";
+import { stripImages } from "../images.js";
+import { BaseLLM } from "../index.js";
+import { streamResponse } from "../stream.js";
 
 class Ollama extends BaseLLM {
   static providerName: ModelProvider = "ollama";
@@ -15,53 +15,73 @@ class Ollama extends BaseLLM {
     model: "codellama-7b",
   };
 
+  private fimSupported: boolean = false;
+
   constructor(options: LLMOptions) {
     super(options);
 
     if (options.model === "AUTODETECT") {
       return;
     }
+
     this.fetch(this.getEndpoint("api/show"), {
       method: "POST",
-      headers: {},
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ name: this._getModel() }),
     })
       .then(async (response) => {
         if (response.status !== 200) {
-          console.warn(
-            "Error calling Ollama /api/show endpoint: ",
-            await response.text(),
-          );
+          // console.warn(
+          //   "Error calling Ollama /api/show endpoint: ",
+          //   await response.text(),
+          // );
           return;
         }
         const body = await response.json();
         if (body.parameters) {
           const params = [];
-          for (let line of body.parameters.split("\n")) {
-            let parts = line.split(" ");
+          for (const line of body.parameters.split("\n")) {
+            let parts = line.match(/^(\S+)\s+((?:".*")|\S+)$/);
             if (parts.length < 2) {
               continue;
             }
-            let key = parts[0];
-            let value = parts[parts.length - 1];
+            let key = parts[1];
+            let value = parts[2];
             switch (key) {
               case "num_ctx":
-                this.contextLength = parseInt(value);
+                this.contextLength =
+                  options.contextLength ?? Number.parseInt(value);
                 break;
               case "stop":
                 if (!this.completionOptions.stop) {
                   this.completionOptions.stop = [];
                 }
-                this.completionOptions.stop.push(value);
+                try {
+                  this.completionOptions.stop.push(JSON.parse(value));
+                } catch (e) {
+                  console.warn(
+                    'Error parsing stop parameter value "{value}: ${e}',
+                  );
+                }
                 break;
               default:
                 break;
             }
           }
         }
+
+        /**
+         * There is no API to get the model's FIM capabilities, so we have to
+         * make an educated guess. If a ".Suffix" variable appears in the template
+         * it's a good indication the model supports FIM.
+         */
+        this.fimSupported = !!body?.template?.includes(".Suffix");
       })
       .catch((e) => {
-        console.warn(`Error calling Ollama /api/show endpoint: ${e}`);
+        // console.warn("Error calling the Ollama /api/show endpoint: ", e);
       });
   }
 
@@ -76,6 +96,11 @@ class Ollama extends BaseLLM {
         "codellama-13b": "codellama:13b",
         "codellama-34b": "codellama:34b",
         "codellama-70b": "codellama:70b",
+        "llama3-8b": "llama3:8b",
+        "llama3-70b": "llama3:70b",
+        "llama3.1-8b": "llama3.1:8b",
+        "llama3.1-70b": "llama3.1:70b",
+        "llama3.1-405b": "llama3.1:405b",
         "phi-2": "phi:2.7b",
         "phind-codellama-34b": "phind-codellama:34b-v2",
         "wizardcoder-7b": "wizardcoder:7b-python",
@@ -91,6 +116,10 @@ class Ollama extends BaseLLM {
         "starcoder-3b": "starcoder:3b",
         "starcoder2-3b": "starcoder2:3b",
         "stable-code-3b": "stable-code:3b",
+        "granite-code-3b": "granite-code:3b",
+        "granite-code-8b": "granite-code:8b",
+        "granite-code-20b": "granite-code:20b",
+        "granite-code-34b": "granite-code:34b",
       }[this.model] ?? this.model
     );
   }
@@ -112,11 +141,13 @@ class Ollama extends BaseLLM {
   private _convertArgs(
     options: CompletionOptions,
     prompt: string | ChatMessage[],
+    suffix?: string,
   ) {
     const finalOptions: any = {
       model: this._getModel(),
       raw: true,
       keep_alive: options.keepAlive ?? 60 * 30, // 30 minutes
+      suffix,
       options: {
         temperature: options.temperature,
         top_p: options.topP,
@@ -155,6 +186,7 @@ class Ollama extends BaseLLM {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(this._convertArgs(options, prompt)),
     });
@@ -173,9 +205,9 @@ class Ollama extends BaseLLM {
           try {
             const j = JSON.parse(chunk);
             if ("response" in j) {
-              yield j["response"];
+              yield j.response;
             } else if ("error" in j) {
-              throw new Error(j["error"]);
+              throw new Error(j.error);
             }
           } catch (e) {
             throw new Error(`Error parsing Ollama response: ${e} ${chunk}`);
@@ -193,6 +225,7 @@ class Ollama extends BaseLLM {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(this._convertArgs(options, messages)),
     });
@@ -216,6 +249,50 @@ class Ollama extends BaseLLM {
                 content: j.message.content,
               };
             } else if (j.error) {
+              throw new Error(j.error);
+            }
+          } catch (e) {
+            throw new Error(`Error parsing Ollama response: ${e} ${chunk}`);
+          }
+        }
+      }
+    }
+  }
+
+  supportsFim(): boolean {
+    return this.fimSupported;
+  }
+
+  protected async *_streamFim(
+    prefix: string,
+    suffix: string,
+    options: CompletionOptions,
+  ): AsyncGenerator<string> {
+    const response = await this.fetch(this.getEndpoint("api/generate"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify(this._convertArgs(options, prefix, suffix)),
+    });
+
+    let buffer = "";
+    for await (const value of streamResponse(response)) {
+      // Append the received chunk to the buffer
+      buffer += value;
+      // Split the buffer into individual JSON chunks
+      const chunks = buffer.split("\n");
+      buffer = chunks.pop() ?? "";
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (chunk.trim() !== "") {
+          try {
+            const j = JSON.parse(chunk);
+            if ("response" in j) {
+              yield j.response;
+            } else if ("error" in j) {
               throw new Error(j.error);
             }
           } catch (e) {

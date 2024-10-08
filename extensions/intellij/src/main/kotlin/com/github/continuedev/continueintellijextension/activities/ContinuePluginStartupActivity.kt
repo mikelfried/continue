@@ -1,5 +1,8 @@
 package com.github.continuedev.continueintellijextension.activities
 
+import com.github.continuedev.continueintellijextension.auth.AuthListener
+import com.github.continuedev.continueintellijextension.auth.ContinueAuthService
+import com.github.continuedev.continueintellijextension.auth.ControlPlaneSessionInfo
 import com.github.continuedev.continueintellijextension.constants.getContinueGlobalPath
 import com.github.continuedev.continueintellijextension.`continue`.*
 import com.github.continuedev.continueintellijextension.listeners.ContinuePluginSelectionListener
@@ -16,67 +19,16 @@ import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.StartupActivity
-import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.util.io.StreamUtil
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.wm.ToolWindowManager
 import kotlinx.coroutines.*
-import java.awt.Dimension
-import java.awt.Font
-import java.awt.GridLayout
 import java.io.*
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
 import java.nio.file.Paths
 import javax.swing.*
-import com.intellij.ide.plugins.PluginManager
-import com.intellij.openapi.extensions.PluginId
-
-class WelcomeDialogWrapper(val project: Project) : DialogWrapper(true) {
-    private var panel: JPanel? = null
-    private var paragraph: JTextArea? = null
-
-    init {
-        init()
-        title = "Welcome to Continue"
-    }
-
-    override fun doOKAction() {
-        super.doOKAction()
-        val toolWindowManager = ToolWindowManager.getInstance(project)
-        val toolWindow =
-                toolWindowManager.getToolWindow("Continue")
-        toolWindow?.show()
-    }
-
-    override fun createCenterPanel(): JComponent? {
-        panel = JPanel(GridLayout(0, 1))
-        panel!!.preferredSize = Dimension(500, panel!!.preferredSize.height)
-        val paragraph = JLabel()
-        val shortcutKey = if (System.getProperty("os.name").toLowerCase().contains("mac")) "⌘" else "⌃"
-        paragraph.text = """
-            <html>Welcome! You can access Continue from the right side panel by clicking on the logo.<br><br>
-            
-            To <b>ask a question</b> about a piece of code: highlight it, use <b>$shortcutKey J</b> to select the code and focus the input box, then ask your question.<br><br>
-            To generate an <b>inline edit</b>: highlight the code you want to edit, use <b>$shortcutKey ⇧ J</b>, then type your requested edit.</html>""".trimIndent()
-
-        paragraph.font = Font("Arial", Font.PLAIN, 16)
-
-        panel!!.add(paragraph)
-
-        return panel
-    }
-
-    override fun createActions(): Array<Action> {
-        val okAction = getOKAction()
-        okAction.putValue(Action.NAME, "Open Continue")
-
-        val cancelAction = getCancelAction()
-        cancelAction.putValue(Action.NAME, "Cancel")
-
-        return arrayOf(okAction, cancelAction)
-    }
-}
+import com.intellij.openapi.components.service
+import com.intellij.openapi.module.ModuleManager
+import com.intellij.openapi.roots.ModuleRootManager
 
 fun showTutorial(project: Project) {
     ContinuePluginStartupActivity::class.java.getClassLoader().getResourceAsStream("continue_tutorial.py").use { `is` ->
@@ -108,9 +60,22 @@ class ContinuePluginStartupActivity : StartupActivity, Disposable, DumbAware {
         removeShortcutFromAction(getPlatformSpecificKeyStroke("J"))
         removeShortcutFromAction(getPlatformSpecificKeyStroke("shift J"))
 
-       ApplicationManager.getApplication().executeOnPooledThread {
-           initializePlugin(project)
-       }
+//        project.messageBus.connect().subscribe(
+//            ToolWindowManagerListener.TOPIC,
+//            object : ToolWindowManagerListener {
+//                override fun stateChanged(toolWindowManager: ToolWindowManager) {
+//                    if (toolWindowManager.activeToolWindowId == TerminalToolWindowFactory.TOOL_WINDOW_ID
+//                        || TerminalView.getInstance(project).isNotAvailable()
+//                    ) {
+//                        project.service<TerminalActivityTrackingService>().update(
+//                            TerminalView.getInstance(project).widgets
+//                        )
+//                    }
+//                }
+//            }
+//        )
+
+        initializePlugin(project)
     }
 
     private fun getPlatformSpecificKeyStroke(key: String): String {
@@ -124,7 +89,12 @@ class ContinuePluginStartupActivity : StartupActivity, Disposable, DumbAware {
         val keyStroke = KeyStroke.getKeyStroke(shortcut)
         val actionIds = keymap.getActionIds(keyStroke)
 
-         for (actionId in actionIds) {
+        // If Continue has been re-assigned to another key, don't remove the shortcut
+        if (!actionIds.any { it.startsWith("continue") }) {
+            return
+        }
+
+        for (actionId in actionIds) {
              if (actionId.startsWith("continue")) {
                  continue
              }
@@ -134,7 +104,7 @@ class ContinuePluginStartupActivity : StartupActivity, Disposable, DumbAware {
                      keymap.removeShortcut(actionId, shortcut)
                  }
              }
-         }
+        }
     }
 
     private fun initializePlugin(project: Project) {
@@ -142,8 +112,6 @@ class ContinuePluginStartupActivity : StartupActivity, Disposable, DumbAware {
             project,
             ContinuePluginService::class.java
         )
-
-        val theme = GetTheme().getTheme()
 
         val defaultStrategy = DefaultTextSelectionStrategy()
 
@@ -154,14 +122,9 @@ class ContinuePluginStartupActivity : StartupActivity, Disposable, DumbAware {
                 settings.continueState.shownWelcomeDialog = true
                 // Open continue_tutorial.py
                 showTutorial(project)
-
-                // Show the welcome dialog
-//                withContext(Dispatchers.Main) {
-//                    val dialog = WelcomeDialogWrapper(project)
-//                    dialog.show()
-//                }
-//                settings.continueState.shownWelcomeDialog = true
             }
+
+            settings.addRemoteSyncJob()
 
             val ideProtocolClient = IdeProtocolClient(
                     continuePluginService,
@@ -173,8 +136,6 @@ class ContinuePluginStartupActivity : StartupActivity, Disposable, DumbAware {
 
             continuePluginService.ideProtocolClient = ideProtocolClient
 
-
-
             // Listen to changes to settings so the core can reload remote configuration
             val connection = ApplicationManager.getApplication().messageBus.connect()
             connection.subscribe(SettingsListener.TOPIC, object : SettingsListener {
@@ -183,79 +144,58 @@ class ContinuePluginStartupActivity : StartupActivity, Disposable, DumbAware {
                 }
             })
 
-            GlobalScope.async(Dispatchers.IO) {
-                val listener =
-                        ContinuePluginSelectionListener(
-                                ideProtocolClient,
-                                coroutineScope
-                        )
+            // Listen for clicking settings button to start the auth flow
+            val authService = service<ContinueAuthService>()
+            val initialSessionInfo = authService.loadControlPlaneSessionInfo()
 
-                // Reload the WebView
-                continuePluginService?.let {
-                    val workspacePaths =
-                            if (project.basePath != null) arrayOf(project.basePath) else emptyList<String>()
-
-                    continuePluginService.workspacePaths = workspacePaths as Array<String>
-                }
-
-                EditorFactory.getInstance().eventMulticaster.addSelectionListener(
-                        listener,
-                        this@ContinuePluginStartupActivity
+            if (initialSessionInfo != null) {
+                val data = mapOf(
+                        "sessionInfo" to initialSessionInfo
                 )
-
-                try {
-                    startProxyServer()
-                } catch (e: Exception) {
-                    println(e)
-                }
+                continuePluginService.coreMessenger?.request("didChangeControlPlaneSessionInfo", data, null) { _ -> }
+                continuePluginService.sendToWebview("didChangeControlPlaneSessionInfo", data)
             }
 
-            GlobalScope.async(Dispatchers.IO) {
-                val myPluginId = "com.github.continuedev.continueintellijextension"
-                val pluginDescriptor = PluginManager.getPlugin(PluginId.getId(myPluginId))
-
-                if (pluginDescriptor == null) {
-                    throw Exception("Plugin not found")
-                }
-                val pluginPath = pluginDescriptor.pluginPath
-                val osName = System.getProperty("os.name").toLowerCase()
-                val os = when {
-                    osName.contains("mac") || osName.contains("darwin") -> "darwin"
-                    osName.contains("win") -> "win32"
-                    osName.contains("nix") || osName.contains("nux") || osName.contains("aix") -> "linux"
-                    else -> "linux"
-                }
-                val osArch = System.getProperty("os.arch").toLowerCase()
-                val arch = when {
-                    osArch.contains("aarch64") || (osArch.contains("arm") && osArch.contains("64")) -> "arm64"
-                    osArch.contains("amd64") || osArch.contains("x86_64") -> "x64"
-                    else -> "x64"
-                }
-                val target = "$os-$arch"
-
-                println("Identified OS: $os, Arch: $arch")
-
-                val corePath = Paths.get(pluginPath.toString(), "core").toString()
-                val targetPath = Paths.get(corePath, target).toString()
-                val continueCorePath = Paths.get(targetPath, "continue-binary" + (if (os == "win32") ".exe" else "")).toString()
-
-                // Copy targetPath / node_sqlite3.node to core / node_sqlite3.node
-                val nodeSqlite3Path = Paths.get(targetPath, "node_sqlite3.node")
-
-                // Create the build/Release path first
-                File(Paths.get(corePath, "build", "Release").toString()).mkdirs()
-
-                val coreNodeSqlite3Path = Paths.get(corePath, "build", "Release", "node_sqlite3.node")
-                if (!File(coreNodeSqlite3Path.toString()).exists()) {
-                    Files.copy(nodeSqlite3Path, coreNodeSqlite3Path)
+            connection.subscribe(AuthListener.TOPIC, object : AuthListener {
+                override fun startAuthFlow() {
+                    authService.startAuthFlow(project)
                 }
 
-                // esbuild needs permissions
-                val esbuildPath = Paths.get(targetPath, "esbuild"+ (if (os == "win32") ".exe" else "")).toString()
+                override fun handleUpdatedSessionInfo(sessionInfo: ControlPlaneSessionInfo?) {
+                    val data = mapOf(
+                            "sessionInfo" to sessionInfo
+                    )
+                    continuePluginService.coreMessenger?.request("didChangeControlPlaneSessionInfo", data, null) { _ -> }
+                    continuePluginService.sendToWebview("didChangeControlPlaneSessionInfo", data)
+                }
+            })
 
-                val coreMessenger = CoreMessenger(project, esbuildPath, continueCorePath, ideProtocolClient);
-                continuePluginService.coreMessenger = coreMessenger
+            val listener =
+                    ContinuePluginSelectionListener(
+                            ideProtocolClient,
+                            coroutineScope
+                    )
+
+            // Reload the WebView
+            continuePluginService?.let { pluginService ->
+                val allModulePaths = ModuleManager.getInstance(project).modules
+                    .flatMap { module -> ModuleRootManager.getInstance(module).contentRoots.map { it.path } }
+                    .map { Paths.get(it).normalize() }
+
+                val topLevelModulePaths = allModulePaths
+                    .filter { modulePath -> allModulePaths.none { it != modulePath && modulePath.startsWith(it) } }
+                    .map { it.toString() }
+
+                pluginService.workspacePaths = topLevelModulePaths.toTypedArray()
             }
+
+            EditorFactory.getInstance().eventMulticaster.addSelectionListener(
+                    listener,
+                    this@ContinuePluginStartupActivity
+            )
+
+            val coreMessengerManager = CoreMessengerManager(project, ideProtocolClient, coroutineScope)
+            continuePluginService.coreMessengerManager = coreMessengerManager
         }
     }
 

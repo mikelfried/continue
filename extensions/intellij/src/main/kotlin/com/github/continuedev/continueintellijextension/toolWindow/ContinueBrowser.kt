@@ -8,41 +8,63 @@ import com.github.continuedev.continueintellijextension.services.ContinuePluginS
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.ServiceManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.jcef.*
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import org.cef.CefApp
 import org.cef.browser.CefBrowser
 import org.cef.handler.CefLoadHandlerAdapter
 
 class ContinueBrowser(val project: Project, url: String, useOsr: Boolean = false) {
+    private val coroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default
+    )
     private val heightChangeListeners = mutableListOf<(Int) -> Unit>()
     fun onHeightChange(listener: (Int) -> Unit) {
         heightChangeListeners.add(listener)
     }
 
     private val PASS_THROUGH_TO_CORE = listOf(
-            "abort",
-            "getContinueDir",
-            "history/list",
-            "history/save",
-            "history/delete",
-            "history/load",
-            "devdata/log",
-            "config/addModel",
-            "config/deleteModel",
-            "config/addOpenAIKey",
-            "llm/streamComplete",
-            "llm/streamChat",
-            "llm/complete",
-            "command/run",
-            "context/loadSubmenuItems",
-            "context/getContextItems",
-            "context/addDocs",
-            "config/getBrowserSerialized",
+        "update/modelChange",
+        "ping",
+        "abort",
+        "history/list",
+        "history/delete",
+        "history/load",
+        "history/save",
+        "devdata/log",
+        "config/addOpenAiKey",
+        "config/addModel",
+        "config/ideSettingsUpdate",
+        "config/getSerializedProfileInfo",
+        "config/deleteModel",
+        "config/newPromptFile",
+        "config/reload",
+        "context/getContextItems",
+        "context/loadSubmenuItems",
+        "context/addDocs",
+        "autocomplete/complete",
+        "autocomplete/cancel",
+        "autocomplete/accept",
+        "command/run",
+        "llm/complete",
+        "llm/streamComplete",
+        "llm/streamChat",
+        "llm/listModels",
+        "streamDiffLines",
+        "stats/getTokensPerDay",
+        "stats/getTokensPerModel",
+        "index/setPaused",
+        "index/forceReIndex",
+        "index/indexingProgressBarInitialized",
+        "completeOnboarding",
+        "addAutocompleteModel",
+        "config/listProfiles",
+        "profiles/switch",
+        "didChangeSelectedProfile",
     )
 
     private fun registerAppSchemeHandler() {
@@ -89,13 +111,20 @@ class ContinueBrowser(val project: Project, url: String, useOsr: Boolean = false
             val ide = continuePluginService.ideProtocolClient;
 
             val respond = fun(data: Any?) {
-                val jsonData = mutableMapOf(
-                        "messageId" to messageId,
-                        "data" to data,
-                        "messageType" to messageType
-                )
-                val jsonString = Gson().toJson(jsonData)
-                sendToWebview(messageType, data, messageId ?: uuid())
+                // This matches the way that we expect receive messages in IdeMessenger.ts (gui)
+                // and the way they are sent in VS Code (webviewProtocol.ts)
+                var result: Map<String, Any?>? = null
+                if (MessageTypes.generatorTypes.contains(messageType)) {
+                    result = data as? Map<String, Any?>
+                } else {
+                    result = mutableMapOf(
+                        "status" to "success",
+                        "done" to false,
+                        "content" to data
+                    )
+                }
+
+                sendToWebview(messageType, result, messageId ?: uuid())
             }
 
             if (PASS_THROUGH_TO_CORE.contains(messageType)) {
@@ -109,7 +138,7 @@ class ContinueBrowser(val project: Project, url: String, useOsr: Boolean = false
                     heightChangeListeners.forEach { it(height) }
                 }
                 "onLoad" -> {
-                    GlobalScope.launch {
+                    coroutineScope.launch {
                         // Set the colors to match Intellij theme
                         val colors = GetTheme().getTheme();
                         sendToWebview("setColors", colors)
@@ -126,6 +155,7 @@ class ContinueBrowser(val project: Project, url: String, useOsr: Boolean = false
                 }
                 "showLines" -> {
                     val data = data.asJsonObject
+                    ide?.setFileOpen(data.get("filepath").asString)
                     ide?.highlightCode(RangeInFile(
                             data.get("filepath").asString,
                             Range(Position(

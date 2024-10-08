@@ -1,23 +1,101 @@
-import * as fs from "fs";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   ContinueRcJson,
+  FileType,
   IDE,
   IdeInfo,
+  IdeSettings,
   IndexTag,
+  Location,
   Problem,
   Range,
+  RangeInFile,
   Thread,
-} from "..";
+  ToastType,
+} from "../index.d.js";
 
-import { getContinueGlobalPath } from "./paths";
+import { GetGhTokenArgs } from "../protocol/ide.js";
+import { getContinueGlobalPath } from "./paths.js";
 
 class FileSystemIde implements IDE {
+  constructor(private readonly workspaceDir: string) {}
+  showToast(
+    type: ToastType,
+    message: string,
+    ...otherParams: any[]
+  ): Promise<void> {
+    return Promise.resolve();
+  }
+  pathSep(): Promise<string> {
+    return Promise.resolve(path.sep);
+  }
+  fileExists(filepath: string): Promise<boolean> {
+    return Promise.resolve(fs.existsSync(filepath));
+  }
+
+  gotoDefinition(location: Location): Promise<RangeInFile[]> {
+    throw new Error("Method not implemented.");
+  }
+  onDidChangeActiveTextEditor(callback: (filepath: string) => void): void {
+    throw new Error("Method not implemented.");
+  }
+
+  async getIdeSettings(): Promise<IdeSettings> {
+    return {
+      remoteConfigServerUrl: undefined,
+      remoteConfigSyncPeriod: 60,
+      userToken: "",
+      enableControlServerBeta: false,
+      pauseCodebaseIndexOnStart: false,
+      enableDebugLogs: false,
+    };
+  }
+  async getGitHubAuthToken(args: GetGhTokenArgs): Promise<string | undefined> {
+    return undefined;
+  }
+  async getLastModified(files: string[]): Promise<{ [path: string]: number }> {
+    const result: { [path: string]: number } = {};
+    for (const file of files) {
+      try {
+        const stats = fs.statSync(file);
+        result[file] = stats.mtimeMs;
+      } catch (error) {
+        console.error(`Error getting last modified time for ${file}:`, error);
+      }
+    }
+    return result;
+  }
+  getGitRootPath(dir: string): Promise<string | undefined> {
+    return Promise.resolve(dir);
+  }
+  async listDir(dir: string): Promise<[string, FileType][]> {
+    const all: [string, FileType][] = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .map((dirent: any) => [
+        dirent.name,
+        dirent.isDirectory()
+          ? (2 as FileType.Directory)
+          : dirent.isSymbolicLink()
+            ? (64 as FileType.SymbolicLink)
+            : (1 as FileType.File),
+      ]);
+    return Promise.resolve(all);
+  }
+
   getRepoName(dir: string): Promise<string | undefined> {
     return Promise.resolve(undefined);
   }
 
-  getTags(artifactId: string): Promise<IndexTag[]> {
-    return Promise.resolve([]);
+  async getTags(artifactId: string): Promise<IndexTag[]> {
+    const directory = (await this.getWorkspaceDirs())[0];
+    return [
+      {
+        artifactId,
+        branch: await this.getBranch(directory),
+        directory,
+      },
+    ];
   }
 
   getIdeInfo(): Promise<IdeInfo> {
@@ -34,12 +112,8 @@ class FileSystemIde implements IDE {
     return Promise.resolve("");
   }
 
-  getStats(directory: string): Promise<{ [path: string]: number }> {
-    return Promise.resolve({});
-  }
-
   isTelemetryEnabled(): Promise<boolean> {
-    return Promise.resolve(false);
+    return Promise.resolve(true);
   }
 
   getUniqueId(): Promise<string> {
@@ -81,26 +155,8 @@ class FileSystemIde implements IDE {
     return Promise.resolve();
   }
 
-  listWorkspaceContents(): Promise<string[]> {
-    return new Promise((resolve, reject) => {
-      fs.readdir("/tmp/continue", (err, files) => {
-        if (err) {
-          reject(err);
-        }
-        resolve(files);
-      });
-    });
-  }
-
   getWorkspaceDirs(): Promise<string[]> {
-    return new Promise((resolve, reject) => {
-      fs.mkdtemp("/tmp/continue", (err, folder) => {
-        if (err) {
-          reject(err);
-        }
-        resolve([folder]);
-      });
-    });
+    return Promise.resolve([this.workspaceDir]);
   }
 
   listFolders(): Promise<string[]> {
@@ -163,6 +219,10 @@ class FileSystemIde implements IDE {
 
   getOpenFiles(): Promise<string[]> {
     return Promise.resolve([]);
+  }
+
+  getCurrentFile(): Promise<string | undefined> {
+    return Promise.resolve("");
   }
 
   getPinnedFiles(): Promise<string[]> {

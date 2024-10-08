@@ -1,6 +1,6 @@
-import * as path from "path";
-import { Language } from "web-tree-sitter";
-const Parser = require("web-tree-sitter");
+import fs from "node:fs";
+import * as path from "node:path";
+import Parser, { Language } from "web-tree-sitter";
 
 export const supportedLanguages: { [key: string]: string } = {
   cpp: "cpp",
@@ -35,7 +35,7 @@ export const supportedLanguages: { [key: string]: string } = {
   mts: "typescript",
   cts: "typescript",
   tsx: "tsx",
-  vue: "vue",
+  // vue: "vue",  // tree-sitter-vue parser is broken
   // The .wasm file being used is faulty, and yaml is split line-by-line anyway for the most part
   // yaml: "yaml",
   // yml: "yaml",
@@ -45,6 +45,7 @@ export const supportedLanguages: { [key: string]: string } = {
   mjs: "javascript",
   cjs: "javascript",
   py: "python",
+  ipynb: "python",
   pyw: "python",
   pyi: "python",
   el: "elisp",
@@ -70,6 +71,7 @@ export const supportedLanguages: { [key: string]: string } = {
   rs: "rust",
   rdl: "systemrdl",
   toml: "toml",
+  sol: "solidity",
 
   // jl: "julia",
   // swift: "swift",
@@ -78,22 +80,28 @@ export const supportedLanguages: { [key: string]: string } = {
 };
 
 export async function getParserForFile(filepath: string) {
-  if (process.env.IS_BINARY) {
-    return undefined;
-  }
   try {
     await Parser.init();
     const parser = new Parser();
 
     const language = await getLanguageForFile(filepath);
+    if (!language) {
+      return undefined;
+    }
+
     parser.setLanguage(language);
 
     return parser;
   } catch (e) {
-    console.error("Unable to load language for file", filepath, e);
+    console.debug("Unable to load language for file", filepath, e);
     return undefined;
   }
 }
+
+// Loading the wasm files to create a Language object is an expensive operation and with
+// sufficient number of files can result in errors, instead keep a map of language name
+// to Language object
+const nameToLanguage = new Map<string, Language>();
 
 export async function getLanguageForFile(
   filepath: string,
@@ -102,19 +110,67 @@ export async function getLanguageForFile(
     await Parser.init();
     const extension = path.extname(filepath).slice(1);
 
-    if (!supportedLanguages[extension]) {
+    const languageName = supportedLanguages[extension];
+    if (!languageName) {
       return undefined;
     }
-
-    const wasmPath = path.join(
-      __dirname,
-      "tree-sitter-wasms",
-      `tree-sitter-${supportedLanguages[extension]}.wasm`,
-    );
-    const language = await Parser.Language.load(wasmPath);
+    let language = nameToLanguage.get(languageName);
+    if (!language) {
+      language = await loadLanguageForFileExt(extension);
+      nameToLanguage.set(languageName, language);
+    }
     return language;
   } catch (e) {
-    console.error("Unable to load language for file", filepath, e);
+    console.debug("Unable to load language for file", filepath, e);
     return undefined;
   }
+}
+
+export enum TSQueryType {
+  CodeSnippets = "code-snippet-queries",
+  Imports = "import-queries",
+  // Used in RootPathContextService.ts
+  FunctionDeclaration = "root-path-context-queries/function_declaration",
+  MethodDefinition = "root-path-context-queries/method_definition",
+  FunctionDefinition = "root-path-context-queries/function_definition",
+  MethodDeclaration = "root-path-context-queries/method_declaration",
+}
+
+export async function getQueryForFile(
+  filepath: string,
+  queryType: TSQueryType,
+): Promise<Parser.Query | undefined> {
+  const language = await getLanguageForFile(filepath);
+  if (!language) {
+    return undefined;
+  }
+
+  const fullLangName = supportedLanguages[filepath.split(".").pop() ?? ""];
+  const sourcePath = path.join(
+    __dirname,
+    "..",
+    "tree-sitter",
+    queryType,
+    `${fullLangName}.scm`,
+  );
+  if (!fs.existsSync(sourcePath)) {
+    return undefined;
+  }
+  const querySource = fs.readFileSync(sourcePath).toString();
+
+  const query = language.query(querySource);
+  return query;
+}
+
+async function loadLanguageForFileExt(
+  fileExtension: string,
+): Promise<Language> {
+  const wasmPath = path.join(
+    __dirname,
+    ...(process.env.NODE_ENV === "test"
+      ? ["node_modules", "tree-sitter-wasms", "out"]
+      : ["tree-sitter-wasms"]),
+    `tree-sitter-${supportedLanguages[fileExtension]}.wasm`,
+  );
+  return await Parser.Language.load(wasmPath);
 }

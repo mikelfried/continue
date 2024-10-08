@@ -1,23 +1,19 @@
-import { createContext } from "react";
 import { useDispatch } from "react-redux";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import Layout from "./components/Layout";
+import { SubmenuContextProvidersContext } from "./context/SubmenuContextProviders";
+import { VscThemeContext } from "./context/VscTheme";
 import useSetup from "./hooks/useSetup";
-import ErrorPage from "./pages/error";
-import { default as Help, default as HelpPage } from "./pages/help";
-import History from "./pages/history";
-import MigrationPage from "./pages/migration";
-import ModelConfig from "./pages/modelconfig";
-import Models from "./pages/models";
-import MonacoPage from "./pages/monaco";
-import SettingsPage from "./pages/settings";
-
-import { ContextSubmenuItem } from "core";
 import useSubmenuContextProviders from "./hooks/useSubmenuContextProviders";
 import { useVscTheme } from "./hooks/useVscTheme";
+import { AddNewModel, ConfigureProvider } from "./pages/AddNewModel";
+import ErrorPage from "./pages/error";
 import GUI from "./pages/gui";
-import ExistingUserOnboarding from "./pages/onboarding/existingUserOnboarding";
-import Onboarding from "./pages/onboarding/onboarding";
+import History from "./pages/history";
+import MigrationPage from "./pages/migration";
+import MonacoPage from "./pages/monaco";
+import MorePage from "./pages/More";
+import SettingsPage from "./pages/settings";
 import Stats from "./pages/stats";
 
 const router = createMemoryRouter([
@@ -43,36 +39,24 @@ const router = createMemoryRouter([
         element: <Stats />,
       },
       {
-        path: "/help",
-        element: <Help />,
-      },
-      {
         path: "/settings",
         element: <SettingsPage />,
       },
       {
-        path: "/models",
-        element: <Models />,
+        path: "/addModel",
+        element: <AddNewModel />,
       },
       {
-        path: "/help",
-        element: <HelpPage />,
+        path: "/addModel/provider/:providerName",
+        element: <ConfigureProvider />,
       },
       {
-        path: "/modelconfig/:modelName",
-        element: <ModelConfig />,
+        path: "/more",
+        element: <MorePage />,
       },
       {
         path: "/monaco",
         element: <MonacoPage />,
-      },
-      {
-        path: "/onboarding",
-        element: <Onboarding />,
-      },
-      {
-        path: "/existingUserOnboarding",
-        element: <ExistingUserOnboarding />,
       },
       {
         path: "/migration",
@@ -81,19 +65,6 @@ const router = createMemoryRouter([
     ],
   },
 ]);
-
-export const SubmenuContextProvidersContext = createContext<{
-  getSubmenuContextItems: (
-    providerTitle: string | undefined,
-    query: string,
-  ) => (ContextSubmenuItem & { providerTitle: string })[];
-  addItem: (providerTitle: string, item: ContextSubmenuItem) => void;
-}>({
-  getSubmenuContextItems: () => [],
-  addItem: () => {},
-});
-
-export const VscThemeContext = createContext<any>(undefined);
 
 function App() {
   const dispatch = useDispatch();

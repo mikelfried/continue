@@ -1,12 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import styled from "styled-components";
 import { defaultBorderRadius } from "../components";
 import TipTapEditor from "../components/mainInput/TipTapEditor";
+import { IdeMessengerContext } from "../context/IdeMessenger";
 import useSetup from "../hooks/useSetup";
 import { selectSlashCommands } from "../redux/selectors";
 import { RootState } from "../redux/store";
-import { ideRequest } from "../util/ide";
 
 const EditorInsetDiv = styled.div`
   max-width: 500px;
@@ -25,7 +25,9 @@ function EditorInset() {
 
   useSetup(dispatch);
 
-  const elementRef = useRef(null);
+  const elementRef = useRef<HTMLDivElement | null>(null);
+
+  const ideMessenger = useContext(IdeMessengerContext);
 
   useEffect(() => {
     if (!elementRef.current) return;
@@ -33,7 +35,7 @@ function EditorInset() {
       if (!elementRef.current) return;
 
       console.log("Height: ", elementRef.current.clientHeight);
-      ideRequest("jetbrains/editorInsetHeight", {
+      ideMessenger.request("jetbrains/editorInsetHeight", {
         height: elementRef.current.clientHeight,
       });
     });
@@ -44,7 +46,7 @@ function EditorInset() {
   return (
     <EditorInsetDiv ref={elementRef}>
       <TipTapEditor
-        availableContextProviders={availableContextProviders}
+        availableContextProviders={availableContextProviders ?? []}
         availableSlashCommands={availableSlashCommands}
         isMainInput={true}
         onEnter={(e, modifiers) => {
